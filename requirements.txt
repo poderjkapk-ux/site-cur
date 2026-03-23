@@ -1,0 +1,14 @@
+python-multipart
+fastapi
+uvicorn[standard]
+aiogram
+sqlalchemy
+asyncpg
+python-dotenv
+aiofiles
+httpx
+qrcode
+Pillow
+passlib[bcrypt]
+python-jose
+bcrypt==4.0.1
