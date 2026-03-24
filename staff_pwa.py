@@ -136,9 +136,12 @@ async def fetch_db_modifiers(session: AsyncSession, items_list: list) -> dict:
 async def check_and_update_order_readiness(session: AsyncSession, order_id: int, bot):
     """
     Перевіряє готовність всіх страв у замовленні.
-    Оновлює глобальний статус замовлення, якщо всі позиції готові.
+    Оновлює глобальний статус замовлення, якщо всі позиції готові і є статус з галочкою `is_auto_ready_status`.
     """
-    order = await session.get(Order, order_id, options=[selectinload(Order.items).joinedload(OrderItem.product)])
+    order = await session.get(Order, order_id, options=[
+        selectinload(Order.items).joinedload(OrderItem.product),
+        joinedload(Order.status)
+    ])
     if not order: return
 
     # Перевіряємо глобальну готовність (всі айтеми готові)
@@ -166,20 +169,37 @@ async def check_and_update_order_readiness(session: AsyncSession, order_id: int,
             if new_b_done:
                 await notify_station_completion(bot, order, 'bar', session)
 
-    # Якщо ВСЕ готово, змінюємо глобальний статус замовлення
-    if all_items_ready:
-        ready_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Готовий до видачі").limit(1))
+    # --- НОВА ЛОГІКА АВТОМАТИЧНОГО ПЕРЕВОДУ (ГАЛОЧКА) ---
+    if all_items_ready and order.status and not order.status.is_completed_status:
+        # Шукаємо статус, у якого активована галочка is_auto_ready_status
+        result = await session.execute(
+            select(OrderStatus).where(OrderStatus.is_auto_ready_status == True).limit(1)
+        )
+        ready_status = result.scalar_one_or_none()
         
-        # Змінюємо статус тільки якщо він ще не фінальний і не "Готов"
-        if ready_status and order.status_id != ready_status.id and not order.status.is_completed_status:
-            old_status = order.status.name if order.status else "Unknown"
+        # Якщо такий статус є і замовлення ще не в ньому
+        if ready_status and order.status_id != ready_status.id:
+            old_status = order.status.name
+            
+            # --- ВИПРАВЛЕННЯ ТУТ ---
+            # Змінюємо не тільки ID, а й сам об'єкт зв'язку в пам'яті SQLAlchemy
             order.status_id = ready_status.id
+            order.status = ready_status  # <--- ОБОВ'ЯЗКОВО!
+            # -----------------------
+            
             session.add(OrderStatusHistory(order_id=order.id, status_id=ready_status.id, actor_info="Система (Авто-готовність)"))
             
             # Сповіщаємо всіх про зміну статусу
             await notify_all_parties_on_status_change(
                 order, old_status, "Система", bot, None, session
             )
+            
+            # Надсилаємо сигнал усім клієнтам PWA, що статус замовлення змінився
+            await manager.broadcast_staff({
+                "type": "order_updated",
+                "order_id": order.id
+            })
+            
             updated = True
 
     if updated:

@@ -16,8 +16,6 @@ from dependencies import get_db_session, check_credentials
 router = APIRouter()
 
 # --- КОНФІГУРАЦІЯ БЕЗПЕКИ ---
-# ID статусів, які критично важливі для початку роботи системи (наприклад, ID 1 - це "Новий")
-# Їх не можна видаляти, щоб не зламати логіку створення замовлення.
 PROTECTED_STATUS_IDS = [1] 
 
 @router.get("/admin/statuses", response_class=HTMLResponse)
@@ -66,7 +64,6 @@ async def admin_statuses(
     rows = ""
     for s in statuses:
         # Перевірка: чи захищений статус?
-        # Захищаємо: ID 1 ("Новий"), Статуси завершення (Каса), Статуси скасування (Склад)
         is_protected = (s.id in PROTECTED_STATUS_IDS) or s.is_completed_status or s.is_cancelled_status
         
         # 1. Колонка: Хто бачить (Доступи)
@@ -79,10 +76,12 @@ async def admin_statuses(
             toggle_btn(s.id, "visible_to_bartender", s.visible_to_bartender, "fa-solid fa-martini-glass", "Екран Бару", "#d946ef")
         )
 
-        # 2. Колонка: Системна логіка
+        # 2. Колонка: Системна логіка (ДОДАНО НОВУ КНОПКУ is_auto_ready_status)
         system_icons = (
             toggle_btn(s.id, "notify_customer", s.notify_customer, "fa-regular fa-bell", "Сповіщати клієнта (Telegram)", "#3b82f6") +
             toggle_btn(s.id, "requires_kitchen_notify", s.requires_kitchen_notify, "fa-solid fa-bullhorn", "Відправляти на приготування (Тригер)", "#f59e0b") +
+            toggle_btn(s.id, "is_auto_ready_status", s.is_auto_ready_status, "fa-solid fa-wand-magic-sparkles", "Авто-перехід при готовності кухні", "#8b5cf6") +
+            "<span style='color:#e2e8f0; margin:0 8px; font-size:1.2em;'>|</span>" +
             toggle_btn(s.id, "is_completed_status", s.is_completed_status, "fa-solid fa-flag-checkered", "Успіх / Гроші в касу", "#16a34a") +
             toggle_btn(s.id, "is_cancelled_status", s.is_cancelled_status, "fa-solid fa-ban", "Скасування / Повернення на склад", "#dc2626")
         )
@@ -99,14 +98,15 @@ async def admin_statuses(
 
         # Стилізація рядка
         bg_style = ""
-        if s.is_completed_status: bg_style = "background-color: #f0fdf4;" # Зелений відтінок
-        if s.is_cancelled_status: bg_style = "background-color: #fef2f2;" # Червоний відтінок
-        if s.requires_kitchen_notify: bg_style = "background-color: #fff7ed;" # Помаранчевий (В роботі)
+        if s.is_completed_status: bg_style = "background-color: #f0fdf4;" 
+        if s.is_cancelled_status: bg_style = "background-color: #fef2f2;" 
+        if s.requires_kitchen_notify: bg_style = "background-color: #fff7ed;" 
+        if s.is_auto_ready_status: bg_style = "background-color: #f5f3ff;" # Фіолетовий відтінок для авто-статусу
 
         rows += f"""
         <tr style="{bg_style}">
             <td style="text-align:center; color:#64748b; font-weight:bold;">{s.id}</td>
-            <td>
+            <td style="vertical-align: middle;">
                 <form action="/admin/edit_status/{s.id}" method="post" class="inline-form" style="margin-bottom:0;">
                     <input type="text" name="name" value="{html.escape(s.name)}" style="width: 100%; min-width:140px; padding: 6px; border:1px solid #cbd5e1; border-radius:6px; font-weight:500;">
                     <button type="submit" class="button-sm secondary" title="Зберегти назву" style="padding: 6px 10px; margin-left:5px;"><i class="fa-solid fa-floppy-disk"></i></button>
@@ -146,10 +146,10 @@ async def admin_statuses(
         <div class="legend-box">
             <span class="legend-title">ℹ️ Розшифровка іконок та логіки:</span>
             <div class="legend-grid">
-                <div class="l-item"><i class="fa-solid fa-bullhorn" style="color:#f59e0b"></i> <b>Старт приготування:</b> Замовлення з'являється у Повара/Бармена.</div>
-                <div class="l-item"><i class="fa-solid fa-flag-checkered" style="color:#16a34a"></i> <b>Успіх (Фінал):</b> Гроші зараховуються в касу, склад списується.</div>
-                <div class="l-item"><i class="fa-solid fa-ban" style="color:#dc2626"></i> <b>Скасування:</b> Замовлення анулюється, товари повертаються на склад.</div>
-                <div class="l-item"><i class="fa-solid fa-lock" style="color:#94a3b8"></i> <b>Захищений:</b> Статус не можна видалити (системний).</div>
+                <div class="l-item"><i class="fa-solid fa-bullhorn" style="color:#f59e0b"></i> <b>Старт приготування:</b> На кухню.</div>
+                <div class="l-item"><i class="fa-solid fa-wand-magic-sparkles" style="color:#8b5cf6"></i> <b>Авто-готовність:</b> Перехід при готовності страв.</div>
+                <div class="l-item"><i class="fa-solid fa-flag-checkered" style="color:#16a34a"></i> <b>Успіх (Фінал):</b> Гроші в касу.</div>
+                <div class="l-item"><i class="fa-solid fa-ban" style="color:#dc2626"></i> <b>Скасування:</b> Відміна.</div>
             </div>
         </div>
 
@@ -180,7 +180,7 @@ async def admin_statuses(
             <div class="modal-body">
                 <form action="/admin/add_status" method="post">
                     <label>Назва статусу *</label>
-                    <input type="text" name="name" placeholder="Наприклад: Очікує оплати" required>
+                    <input type="text" name="name" placeholder="Наприклад: Готовий до видачі" required>
                     
                     <div style="background:#f1f5f9; padding:15px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:15px;">
                         <label style="margin-bottom:10px; display:block; font-weight:bold; color:#334155;">Хто бачить цей статус?</label>
@@ -203,7 +203,12 @@ async def admin_statuses(
                         
                         <div class="checkbox-group">
                             <input type="checkbox" name="requires_kitchen_notify" value="true">
-                            <label>👨‍🍳 Тригер виробництва (З'являється на Кухні)</label>
+                            <label>👨‍🍳 Тригер виробництва (На Кухню)</label>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <input type="checkbox" name="is_auto_ready_status" value="true">
+                            <label>✨ <b>Авто-готовність:</b> Переводити сюди автоматично, коли всі страви готові</label>
                         </div>
                         
                         <div class="checkbox-group">
@@ -244,6 +249,7 @@ async def add_status(
     visible_to_chef: bool = Form(False), 
     visible_to_bartender: bool = Form(False), 
     requires_kitchen_notify: bool = Form(False), 
+    is_auto_ready_status: bool = Form(False),
     is_completed_status: bool = Form(False), 
     is_cancelled_status: bool = Form(False), 
     session: AsyncSession = Depends(get_db_session), 
@@ -258,6 +264,7 @@ async def add_status(
         visible_to_chef=visible_to_chef, 
         visible_to_bartender=visible_to_bartender, 
         requires_kitchen_notify=requires_kitchen_notify, 
+        is_auto_ready_status=is_auto_ready_status,
         is_completed_status=is_completed_status, 
         is_cancelled_status=is_cancelled_status
     ))
@@ -278,6 +285,7 @@ async def edit_status(
         if name and not field: 
             status.name = name
         elif field: 
+            # Оскільки тепер всі поля булеві, універсальний обробник спрацює для всіх
             setattr(status, field, value.lower() == 'true')
         await session.commit()
     return RedirectResponse(url="/admin/statuses", status_code=303)
@@ -292,7 +300,6 @@ async def delete_status(
     if not status:
         return RedirectResponse(url="/admin/statuses", status_code=303)
 
-    # ЗАХИСТ: Не дозволяємо видаляти критично важливі статуси
     if status.id in PROTECTED_STATUS_IDS or status.is_completed_status or status.is_cancelled_status:
         return RedirectResponse(url="/admin/statuses?error=protected", status_code=303)
 

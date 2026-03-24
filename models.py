@@ -205,6 +205,10 @@ class OrderStatus(Base):
     visible_to_bartender: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     requires_kitchen_notify: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
+    # --- НОВЕ ПОЛЕ: Куди переводити автоматично при готовності ---
+    is_auto_ready_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    # ---------------------------------------------------------------
+    
     # Фінальні статуси
     is_completed_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     is_cancelled_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
