@@ -1126,6 +1126,7 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         "delivery_time": order.delivery_time,
         "comment": order.comment,             
         "payment_method": order.payment_method,
+        "is_cash_turned_in": order.is_cash_turned_in,
         "created_at": order.created_at.strftime('%H:%M'),
         "couriers": couriers_list,
         "can_assign_courier": employee.role.can_manage_orders,
@@ -1349,7 +1350,7 @@ async def update_order_status_api(
                  order.completed_by_courier_id = employee.id
 
         await link_order_to_shift(session, order, employee.id)
-        if order.payment_method == 'cash':
+        if order.payment_method == 'cash' and not order.is_cash_turned_in:
             debtor_id = employee.id
             if employee.role.can_manage_orders:
                 if order.courier_id: debtor_id = order.courier_id
@@ -1364,6 +1365,65 @@ async def update_order_status_api(
         order, old_status, actor_info, 
         request.app.state.admin_bot, request.app.state.client_bot, session
     )
+    
+    await manager.broadcast_staff({
+        "type": "order_updated",
+        "order_id": order.id
+    })
+
+    return JSONResponse({"success": True})
+
+@router.post("/api/order/mark_paid")
+async def mark_order_paid_api(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "Немає прав на фінансові операції"}, status_code=403)
+        
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    
+    order = await session.get(Order, order_id, options=[joinedload(Order.status)])
+    if not order: 
+        return JSONResponse({"error": "Замовлення не знайдено"}, 404)
+    
+    if order.is_cash_turned_in: 
+        return JSONResponse({"error": "Замовлення вже оплачено"}, 400)
+        
+    order.is_cash_turned_in = True
+    actor_info = f"{employee.full_name} (PWA)"
+    
+    session.add(OrderLog(order_id=order.id, message="Підтверджено отримання готівки (Викуп/Здача)", actor=actor_info))
+    
+    if order.status.is_completed_status:
+        await unregister_employee_debt(session, order)
+        shift = await get_any_open_shift(session)
+        if shift:
+            await add_shift_transaction(session, shift.id, order.total_price, 'in', f"Оплата готівкою за замовлення #{order.id} (Після закриття)")
+
+    # ---> НОВЕ: СИНХРОНІЗАЦІЯ З RESTIFY <---
+    # Якщо замовлення прив'язане до кур'єра Restify, повідомляємо SaaS про викуп
+    if order.restify_job_id:
+        try:
+            token = await get_restify_token(session)
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{RESTIFY_BASE_URL}/api/partner/confirm_buyout_paid",
+                    data={"job_id": order.restify_job_id},
+                    cookies={"partner_token": token},
+                    timeout=5.0
+                )
+                if resp.status_code == 200:
+                    session.add(OrderLog(order_id=order.id, message="Restify: підтверджено оплату кур'єру", actor="Система"))
+                else:
+                    logger.error(f"Restify confirm_buyout_paid failed: {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.error(f"Error syncing payment with Restify: {e}")
+    # ----------------------------------------
+
+    await session.commit()
     
     await manager.broadcast_staff({
         "type": "order_updated",

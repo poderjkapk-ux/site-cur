@@ -415,6 +415,14 @@ STAFF_DASHBOARD_HTML = """
         .toggle-option {{ flex: 1; text-align: center; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: 600; color: #666; transition: all 0.2s; }}
         .toggle-option.active.income {{ background: #27ae60; color: white; }}
         .toggle-option.active.expense {{ background: #e74c3c; color: white; }}
+        
+        /* TABS IN MODAL */
+        .tabs {{ display: flex; border-bottom: 2px solid #eee; margin-bottom: 15px; }}
+        .tab-btn {{ flex: 1; padding: 12px 5px; text-align: center; font-weight: 600; color: #777; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; font-size: 0.95rem; transition: all 0.2s; }}
+        .tab-btn.active {{ color: var(--primary); border-bottom-color: var(--primary); }}
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; animation: fadeIn 0.3s; }}
+        @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(5px); }} to {{ opacity: 1; transform: translateY(0); }} }}
     </style>
 </head>
 <body>
@@ -726,43 +734,23 @@ STAFF_DASHBOARD_HTML = """
                         <div style="background:#e0e7ff; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #c7d2fe;">
                             <h4 style="margin:0 0 10px 0; color:#3730a3;"><i class="fa-solid fa-rocket"></i> Викликати кур'єра Restify</h4>
                             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
-                                <div>
-                                    <label style="font-size:0.8rem; color:#4f46e5;">Час приготування</label>
-                                    <select id="res_prep_time" class="form-control" style="padding:8px;">
-                                        <option value="10">10 хв</option>
-                                        <option value="15" selected>15 хв</option>
-                                        <option value="30">30 хв</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style="font-size:0.8rem; color:#4f46e5;">Вартість доставки</label>
-                                    <input type="number" id="res_fee" class="form-control" value="80" style="padding:8px;">
-                                </div>
+                                <div><label style="font-size:0.8rem; color:#4f46e5;">Час приготування</label><select id="res_prep_time" class="form-control" style="padding:8px;"><option value="10">10 хв</option><option value="15" selected>15 хв</option><option value="30">30 хв</option></select></div>
+                                <div><label style="font-size:0.8rem; color:#4f46e5;">Вартість доставки</label><input type="number" id="res_fee" class="form-control" value="80" style="padding:8px;"></div>
                             </div>
                             <label style="font-size:0.8rem; color:#4f46e5;">Тип оплати кур'єром</label>
                             <select id="res_payment" class="form-control" style="padding:8px; margin-bottom:10px;">
                                 <option value="prepaid" ${{data.payment_method === 'card' ? 'selected' : ''}}>Вже оплачено</option>
                                 <option value="buyout" ${{data.payment_method === 'cash' ? 'selected' : ''}}>Викуп (Кур'єр платить закладу)</option>
                             </select>
-                            <button class="big-btn" style="background:#4f46e5;" onclick="callRestifyCourier(${{data.id}})">
-                                <i class="fa-solid fa-motorcycle"></i> Знайти кур'єра Restify
-                            </button>
+                            <button class="big-btn" style="background:#4f46e5; margin-top:5px;" onclick="callRestifyCourier(${{data.id}})"><i class="fa-solid fa-motorcycle"></i> Знайти кур'єра Restify</button>
                         </div>`;
                     }} else {{
                         restifyHtml = `
                         <div style="background:#f0fdf4; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #bbf7d0;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                                <h4 style="margin:0; color:#166534;"><i class="fa-solid fa-rocket"></i> Restify Кур'єр</h4>
-                                <span class="badge" style="background:#166534; color:white;" id="res-status-badge">${{data.restify_status}}</span>
-                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><h4 style="margin:0; color:#166534;"><i class="fa-solid fa-rocket"></i> Restify Кур'єр</h4><span class="badge" style="background:#166534; color:white;" id="res-status-badge">${{data.restify_status}}</span></div>
                             <div id="restify-courier-info" style="font-size:0.9rem; margin-bottom:10px;">Завантаження даних...</div>
-                            <div style="display:flex; gap:10px;">
-                                <button class="action-btn" style="flex:1; background:#3b82f6;" onclick="openRestifyTrack(${{data.id}})">
-                                    <i class="fa-solid fa-map-location-dot"></i> Карта
-                                </button>
-                            </div>
+                            <button class="action-btn" style="width:100%; background:#3b82f6;" onclick="openRestifyTrack(${{data.id}})"><i class="fa-solid fa-map-location-dot"></i> Відкрити Карту</button>
                         </div>`;
-                        
                         if (window.trackingInterval) clearTimeout(window.trackingInterval);
                         setTimeout(() => fetchRestifyCourierInfo(data.id), 500);
                     }}
@@ -772,56 +760,55 @@ STAFF_DASHBOARD_HTML = """
                 let payStyle = data.payment_method === 'cash' ? 'background:#fff3e0; color:#e67e22;' : 'background:#e3f2fd; color:#2980b9;';
                 let payIcon = data.payment_method === 'cash' ? '<i class="fa-solid fa-money-bill-wave"></i>' : '<i class="fa-regular fa-credit-card"></i>';
                 let payText = data.payment_method === 'cash' ? 'Готівка' : 'Картка / Термінал';
-                let paymentHtml = `<div style="${{payStyle}} padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; text-align:center; display:flex; justify-content:center; gap:10px; align-items:center;">
+                let paymentHtml = `<div style="${{payStyle}} padding:15px; border-radius:8px; margin-bottom:10px; font-weight:bold; font-size:1.1rem; text-align:center; display:flex; justify-content:center; gap:10px; align-items:center;">
                     ${{payIcon}} <span>${{payText}}</span>
                 </div>`;
+
+                // --- GENERATE CASH BUTTON ---
+                let cashBtnHtml = "";
+                if (data.payment_method === 'cash' && !data.is_cash_turned_in) {{
+                    cashBtnHtml = `
+                    <div style="background:#fdf0d5; border:1px dashed #f39c12; padding:15px; border-radius:12px; margin-bottom:15px; text-align:center;">
+                        <h4 style="margin:0 0 10px 0; color:#d35400;">⚠️ Очікується оплата</h4>
+                        <button class="big-btn success" style="margin-top:0;" onclick="markOrderPaid(${{data.id}})">
+                            ✅ Гроші отримано (Викуп)
+                        </button>
+                        <p style="font-size:0.8rem; color:#777; margin:8px 0 0 0; line-height:1.3;">Натисніть при видачі кур'єру (якщо він одразу платить), або після його повернення з доставки.</p>
+                    </div>`;
+                }} else if (data.payment_method === 'cash' && data.is_cash_turned_in) {{
+                    cashBtnHtml = `<div style="background:#e8f5e9; color:#27ae60; padding:15px; border-radius:8px; margin-bottom:15px; text-align:center; font-weight:bold; font-size:1.1rem;"><i class="fa-solid fa-check-circle"></i> Готівку отримано (Сплачено)</div>`;
+                }}
                 
                 // --- GENERATE COMMENT HTML ---
                 let commentHtml = "";
                 if (data.comment) {{
-                    commentHtml = `<div style="background:#fee2e2; color:#c0392b; padding:10px; border-radius:8px; margin-bottom:15px; font-size:0.95rem; line-height:1.4; border-left: 4px solid #c0392b;">
+                    commentHtml = `<div style="background:#fee2e2; color:#c0392b; padding:15px; border-radius:8px; margin-bottom:15px; font-size:0.95rem; line-height:1.4; border-left: 4px solid #c0392b;">
                         <i class="fa-solid fa-circle-exclamation"></i> <b>Коментар:</b> ${{data.comment}}
                     </div>`;
                 }}
 
                 // --- DATA FOR CUSTOMER EDIT CARD ---
-                const custName = data.customer_name || '';
-                const custPhone = data.phone_number || '';
-                const custAddr = data.address || '';
-                const custTime = data.delivery_time || 'Якнайшвидше';
-                const custComment = data.comment || '';
-
                 const customerHtml = `
                 <div class="customer-edit-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;" onclick="document.getElementById('cust-details').classList.toggle('show')">
-                        <div>
-                            <i class="fa-solid fa-user-pen"></i> <b>${{custName || 'Клієнт'}}</b>
-                            <div style="font-size:0.8rem; color:#666;">${{custPhone}}</div>
-                        </div>
-                        <i class="fa-solid fa-chevron-down" style="color:#999;"></i>
+                    <div class="form-group">
+                        <label>Ім'я</label>
+                        <input type="text" id="edit-name" class="form-control" value="${{data.customer_name || ''}}">
                     </div>
-                    
-                    <div id="cust-details" class="collapse-content">
-                        <div class="form-group">
-                            <label>Ім'я</label>
-                            <input type="text" id="edit-name" class="form-control" value="${{custName}}">
-                        </div>
-                        <div class="form-group">
-                            <label>Телефон</label>
-                            <input type="tel" id="edit-phone" class="form-control" value="${{custPhone}}">
-                        </div>
-                        <div class="form-group">
-                            <label>Адреса</label>
-                            <input type="text" id="edit-address" class="form-control" value="${{custAddr}}">
-                        </div>
-                        <div class="form-group">
-                            <label>Час доставки</label>
-                            <input type="text" id="edit-time" class="form-control" value="${{custTime}}">
-                        </div>
-                        <div class="form-group">
-                            <label>Коментар (Кухня/Доставка)</label>
-                            <textarea id="edit-comment" class="form-control" rows="2" placeholder="Напр: Домофон 25, без цибулі...">${{custComment}}</textarea>
-                        </div>
+                    <div class="form-group">
+                        <label>Телефон</label>
+                        <input type="tel" id="edit-phone" class="form-control" value="${{data.phone_number || ''}}">
+                    </div>
+                    <div class="form-group">
+                        <label>Адреса</label>
+                        <textarea id="edit-address" class="form-control" rows="2">${{data.address || ''}}</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Час доставки</label>
+                        <input type="text" id="edit-time" class="form-control" value="${{data.delivery_time || 'Якнайшвидше'}}">
+                    </div>
+                    <div class="form-group">
+                        <label>Коментар (Кухня/Доставка)</label>
+                        <textarea id="edit-comment" class="form-control" rows="2">${{data.comment || ''}}</textarea>
                     </div>
                 </div>`;
 
@@ -833,12 +820,12 @@ STAFF_DASHBOARD_HTML = """
                     }});
                 }}
 
-                renderEditCart(data.can_edit_items, data.statuses, courierHtml, customerHtml, data.id, paymentHtml, commentHtml, restifyHtml);
+                renderEditCart(data.can_edit_items, data.statuses, courierHtml, customerHtml, data.id, paymentHtml, commentHtml, restifyHtml, cashBtnHtml);
                 
             }} catch (e) {{ body.innerHTML = "Помилка: " + e.message; }}
         }}
 
-        function renderEditCart(canEdit, statuses, courierHtml, customerHtml, orderIdStr, paymentHtml = "", commentHtml = "", restifyHtml = "") {{
+        function renderEditCart(canEdit, statuses, courierHtml, customerHtml, orderIdStr, paymentHtml = "", commentHtml = "", restifyHtml = "", cashBtnHtml = "") {{
             const body = document.getElementById('modal-body');
             let itemsHtml = `<div class="edit-list">`;
             const currentItems = Object.entries(cart);
@@ -848,12 +835,7 @@ STAFF_DASHBOARD_HTML = """
                 currentItems.forEach(([key, item]) => {{
                     const itemSum = item.price * item.qty;
                     currentTotal += itemSum;
-                    
-                    let modsText = "";
-                    if(item.modifiers && item.modifiers.length > 0) {{
-                        modsText = `<div class="product-mods">+ ${{item.modifiers.map(m=>m.name).join(', ')}}</div>`;
-                    }}
-
+                    let modsText = item.modifiers && item.modifiers.length > 0 ? `<div class="product-mods">+ ${{item.modifiers.map(m=>m.name).join(', ')}}</div>` : "";
                     const controls = canEdit ? `
                         <div class="qty-ctrl-lg">
                             <button class="qty-btn-lg" onclick="updateCartItemQty('${{key}}', -1, true)">-</button>
@@ -862,19 +844,9 @@ STAFF_DASHBOARD_HTML = """
                         </div>
                         <button class="del-btn" onclick="updateCartItemQty('${{key}}', -999, true)"><i class="fa-solid fa-trash"></i></button>
                     ` : `<div style="font-weight:bold; font-size:1.1rem;">x${{item.qty}}</div>`;
-
-                    itemsHtml += `
-                    <div class="edit-item">
-                        <div class="product-info">
-                            <div class="product-name">${{item.name}}</div>
-                            ${{modsText}}
-                            <div class="product-price">${{item.price.toFixed(2)}} x ${{item.qty}} = <b>${{itemSum.toFixed(2)}}</b></div>
-                        </div>
-                        <div style="display:flex;">${{controls}}</div>
-                    </div>`;
+                    itemsHtml += `<div class="edit-item"><div class="product-info"><div class="product-name">${{item.name}}</div>${{modsText}}<div class="product-price">${{item.price.toFixed(2)}} x ${{item.qty}} = <b>${{itemSum.toFixed(2)}}</b></div></div><div style="display:flex;">${{controls}}</div></div>`;
                 }});
             }} else itemsHtml += `<div style="padding:10px; text-align:center; color:#999;">Кошик порожній</div>`;
-            
             itemsHtml += `</div>`;
             
             let statusOptions = "";
@@ -883,30 +855,71 @@ STAFF_DASHBOARD_HTML = """
             }});
             
             const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
-            const saveBtn = `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти зміни (~${{currentTotal.toFixed(2)}} грн)</button>`;
+            const saveBtn = `<button class="big-btn" style="margin-top:auto;" onclick="saveOrderChanges()">💾 Зберегти зміни (~${{currentTotal.toFixed(2)}} грн)</button>`;
 
+            // --- НОВЫЙ ИНТЕРФЕЙС С ТАБАМИ ---
             body.innerHTML = `
-                ${{paymentHtml}}
-                ${{commentHtml}}
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0;">Замовлення #${{orderIdStr}}</h3>
-                    <div style="font-size:1.2rem; font-weight:bold;">${{currentTotal.toFixed(2)}} грн</div>
+                    <div style="font-size:1.2rem; font-weight:bold; color:var(--primary);">${{currentTotal.toFixed(2)}} грн</div>
                 </div>
-                ${{statusOptions ? `
-                <div style="margin-bottom:15px; background:#f9f9f9; padding:10px; border-radius:8px;">
-                    <select id="status-select" style="width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; background:#fff; font-size:1rem; font-weight:bold;" onchange="changeOrderStatus(this)">
-                        ${{statusOptions}}
-                    </select>
-                </div>` : ''}}
-                ${{restifyHtml}}
-                ${{courierHtml}}
-                ${{customerHtml}}
-                <h4 style="margin:10px 0 5px 0;">Склад замовлення:</h4>
-                ${{itemsHtml}}
-                ${{addBtn}}
-                ${{saveBtn}}
+                
+                <div class="tabs">
+                    <div class="tab-btn active" onclick="switchOrderTab('tab-items')"><i class="fa-solid fa-utensils"></i> Склад</div>
+                    <div class="tab-btn" onclick="switchOrderTab('tab-delivery')"><i class="fa-solid fa-truck"></i> Дані</div>
+                    <div class="tab-btn" onclick="switchOrderTab('tab-manage')"><i class="fa-solid fa-gear"></i> Оплата</div>
+                </div>
+
+                <div id="tab-items" class="tab-content active" style="display:flex; flex-direction:column; height:100%;">
+                    ${{commentHtml}}
+                    ${{itemsHtml}}
+                    ${{addBtn}}
+                    ${{saveBtn}}
+                </div>
+
+                <div id="tab-delivery" class="tab-content" style="overflow-y:auto; padding-bottom:20px;">
+                    ${{courierHtml}}
+                    ${{restifyHtml}}
+                    <h4 style="margin-top:0;">Клієнт</h4>
+                    ${{customerHtml}}
+                    <button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти дані</button>
+                </div>
+
+                <div id="tab-manage" class="tab-content" style="overflow-y:auto;">
+                    ${{paymentHtml}}
+                    ${{cashBtnHtml}}
+                    ${{statusOptions ? `
+                    <div style="margin-bottom:15px; background:#f9f9f9; padding:15px; border-radius:12px; border:1px solid #eee;">
+                        <label style="font-size:0.85rem; color:#666; display:block; margin-bottom:8px;">Статус замовлення:</label>
+                        <select id="status-select" style="width:100%; padding:12px; border-radius:8px; border:1px solid #ddd; background:#fff; font-size:1.1rem; font-weight:bold;" onchange="changeOrderStatus(this)">
+                            ${{statusOptions}}
+                        </select>
+                    </div>` : ''}}
+                </div>
             `;
         }}
+
+        window.switchOrderTab = function(tabId) {{
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            event.currentTarget.classList.add('active');
+        }};
+
+        window.markOrderPaid = async function(orderId) {{
+            if(!confirm("Гроші за замовлення успішно отримано?")) return;
+            try {{
+                const res = await fetch('/staff/api/order/mark_paid', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ orderId: orderId }})
+                }});
+                const data = await res.json();
+                if(data.success) {{
+                    showToast("Оплата зафіксована! ✅");
+                    openOrderEditModal(orderId, true);
+                }} else alert(data.error);
+            }} catch(e) {{ alert("Помилка з'єднання"); }}
+        }};
 
         // --- RESTIFY JS FUNCTIONS ---
         async function callRestifyCourier(orderId) {{
