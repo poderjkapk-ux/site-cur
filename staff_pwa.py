@@ -1071,6 +1071,8 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
     order = await session.get(Order, order_id, options=[selectinload(Order.items), joinedload(Order.status), joinedload(Order.courier)])
     if not order: return JSONResponse({"error": "Не знайдено"}, status_code=404)
     
+    settings = await session.get(Settings, 1)
+    
     status_query = select(OrderStatus)
     if employee.role.can_manage_orders:
         status_query = status_query.where(OrderStatus.visible_to_operator == True)
@@ -1134,7 +1136,8 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         
         # --- ІНТЕГРАЦІЯ З RESTIFY ---
         "restify_job_id": order.restify_job_id,
-        "restify_status": order.restify_status
+        "restify_status": order.restify_status,
+        "restify_is_active": settings.restify_is_active if settings else False
         # ----------------------------
     })
 
@@ -1388,6 +1391,9 @@ async def mark_order_paid_api(
     order = await session.get(Order, order_id, options=[joinedload(Order.status)])
     if not order: 
         return JSONResponse({"error": "Замовлення не знайдено"}, 404)
+        
+    if not order.restify_job_id:
+        return JSONResponse({"error": "Ця кнопка призначена тільки для підтвердження викупу кур'єром Restify."}, status_code=400)
     
     if order.is_cash_turned_in: 
         return JSONResponse({"error": "Замовлення вже оплачено"}, 400)

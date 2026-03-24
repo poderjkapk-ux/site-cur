@@ -149,6 +149,7 @@ async def get_design_settings_page(
     """
 
     # --- БЛОК ІНТЕГРАЦІЇ З RESTIFY ---
+    restify_is_active_checked = "checked" if settings.restify_is_active else ""
     restify_email = html.escape(settings.restify_email or "")
     restify_password = settings.restify_password if settings.restify_password else ""
 
@@ -160,6 +161,11 @@ async def get_design_settings_page(
         <p style="font-size: 0.9em; color: #4338ca; margin-bottom: 15px; background: #c7d2fe; padding: 10px; border-radius: 5px;">
             Введіть Email та Пароль від вашого акаунту <b>ресторану-партнера</b> у системі Restify. Це дозволить адміністраторам автоматично викликати кур'єрів через PWA.
         </p>
+        
+        <div class="checkbox-group" style="margin-bottom: 15px;">
+            <input type="checkbox" id="restify_is_active" name="restify_is_active" value="true" {restify_is_active_checked}>
+            <label for="restify_is_active" style="font-weight:bold; color: #3730a3;">Активувати функціонал Restify для персоналу</label>
+        </div>
         
         <div class="form-grid">
             <div>
@@ -201,6 +207,7 @@ async def save_design_settings(
     google_analytics_id: str = Form(""),
     
     # --- RESTIFY INTEGRATION ---
+    restify_is_active: str = Form(None),
     restify_email: str = Form(""),
     restify_password: str = Form(""),
     
@@ -266,6 +273,8 @@ async def save_design_settings(
     settings.google_analytics_id = google_analytics_id.strip() if google_analytics_id else None
     
     # --- ЗБЕРЕЖЕННЯ RESTIFY ---
+    settings.restify_is_active = (restify_is_active == "true")
+    
     if restify_email and restify_email.strip():
         settings.restify_email = restify_email.strip()
     else:

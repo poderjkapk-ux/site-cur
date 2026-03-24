@@ -15,9 +15,9 @@ if not DATABASE_URL:
     print("❌ Помилка: Не знайдено DATABASE_URL у файлі .env")
     sys.exit(1)
 
-async def add_comment_column():
+async def update_database_schema():
     """
-    Додає колонку 'comment' до таблиці 'orders', якщо вона ще не існує.
+    Додає нові необхідні колонки до таблиць бази даних.
     """
     print(f"🔄 Підключення до бази даних...")
     
@@ -26,14 +26,17 @@ async def add_comment_column():
 
     try:
         async with engine.begin() as conn:
-            print("🛠 Перевірка структури таблиці 'orders'...")
+            print("🛠 Оновлення структури таблиць...")
             
-            # SQL-запит для додавання колонки. 
-            # IF NOT EXISTS гарантує, що помилки не буде, якщо колонка вже є.
-            sql_query = text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS comment VARCHAR(500);")
+            # Додаємо колонку comment до таблиці orders (з попередніх оновлень)
+            sql_query1 = text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS comment VARCHAR(500);")
+            await conn.execute(sql_query1)
+            print("✅ Колонку 'comment' перевірено/додано до таблиці 'orders'.")
             
-            await conn.execute(sql_query)
-            print("✅ Успішно! Колонку 'comment' додано до таблиці 'orders' (або вона вже була).")
+            # Додаємо нову колонку restify_is_active до таблиці settings
+            sql_query2 = text("ALTER TABLE settings ADD COLUMN IF NOT EXISTS restify_is_active BOOLEAN DEFAULT FALSE;")
+            await conn.execute(sql_query2)
+            print("✅ Колонку 'restify_is_active' перевірено/додано до таблиці 'settings'.")
             
     except Exception as e:
         print(f"❌ Виникла помилка при оновленні бази даних:\n{e}")
@@ -47,4 +50,4 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     
     # Запуск асинхронної функції
-    asyncio.run(add_comment_column())
+    asyncio.run(update_database_schema())

@@ -480,6 +480,7 @@ class Settings(Base):
     # ------------------------------------------
 
     # --- ІНТЕГРАЦІЯ З ГЛОБАЛЬНИМ RESTIFY ---
+    restify_is_active: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     restify_email: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
     restify_password: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
     restify_token: Mapped[Optional[str]] = mapped_column(sa.String(500), nullable=True) # Для кешування JWT

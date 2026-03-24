@@ -726,9 +726,12 @@ STAFF_DASHBOARD_HTML = """
                     courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр (Локальний):</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
                 }}
 
-                // --- GENERATE RESTIFY HTML ---
+                // --- GENERATE RESTIFY HTML & PAYMENT BUTTON ---
                 let restifyHtml = "";
-                if (data.is_delivery && data.can_assign_courier) {{
+                let cashBtnHtml = ""; // Локальную кнопку убираем полностью
+                
+                // Проверяем включен ли функционал в админке
+                if (data.restify_is_active && data.is_delivery && data.can_assign_courier) {{
                     if (!data.restify_job_id) {{
                         restifyHtml = `
                         <div style="background:#e0e7ff; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #c7d2fe;">
@@ -745,11 +748,25 @@ STAFF_DASHBOARD_HTML = """
                             <button class="big-btn" style="background:#4f46e5; margin-top:5px;" onclick="callRestifyCourier(${{data.id}})"><i class="fa-solid fa-motorcycle"></i> Знайти кур'єра Restify</button>
                         </div>`;
                     }} else {{
+                        // Кнопка подтверждения оплаты (только для Restify внутри его зоны)
+                        let restifyPayBtn = "";
+                        if (data.payment_method === 'cash' && !data.is_cash_turned_in) {{
+                            restifyPayBtn = `
+                            <div style="margin-top:10px; padding-top:10px; border-top:1px dashed #bbf7d0;">
+                                <button class="big-btn success" style="margin-top:0;" onclick="markOrderPaid(${{data.id}})">
+                                    ✅ Підтвердити отримання грошей (Викуп)
+                                </button>
+                            </div>`;
+                        }} else if (data.payment_method === 'cash' && data.is_cash_turned_in) {{
+                            restifyPayBtn = `<div style="margin-top:10px; padding-top:10px; border-top:1px dashed #bbf7d0; color:#166534; font-weight:bold;"><i class="fa-solid fa-check-circle"></i> Викуп успішно сплачено</div>`;
+                        }}
+
                         restifyHtml = `
                         <div style="background:#f0fdf4; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #bbf7d0;">
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><h4 style="margin:0; color:#166534;"><i class="fa-solid fa-rocket"></i> Restify Кур'єр</h4><span class="badge" style="background:#166534; color:white;" id="res-status-badge">${{data.restify_status}}</span></div>
                             <div id="restify-courier-info" style="font-size:0.9rem; margin-bottom:10px;">Завантаження даних...</div>
                             <button class="action-btn" style="width:100%; background:#3b82f6;" onclick="openRestifyTrack(${{data.id}})"><i class="fa-solid fa-map-location-dot"></i> Відкрити Карту</button>
+                            ${{restifyPayBtn}}
                         </div>`;
                         if (window.trackingInterval) clearTimeout(window.trackingInterval);
                         setTimeout(() => fetchRestifyCourierInfo(data.id), 500);
@@ -763,21 +780,6 @@ STAFF_DASHBOARD_HTML = """
                 let paymentHtml = `<div style="${{payStyle}} padding:15px; border-radius:8px; margin-bottom:10px; font-weight:bold; font-size:1.1rem; text-align:center; display:flex; justify-content:center; gap:10px; align-items:center;">
                     ${{payIcon}} <span>${{payText}}</span>
                 </div>`;
-
-                // --- GENERATE CASH BUTTON ---
-                let cashBtnHtml = "";
-                if (data.payment_method === 'cash' && !data.is_cash_turned_in) {{
-                    cashBtnHtml = `
-                    <div style="background:#fdf0d5; border:1px dashed #f39c12; padding:15px; border-radius:12px; margin-bottom:15px; text-align:center;">
-                        <h4 style="margin:0 0 10px 0; color:#d35400;">⚠️ Очікується оплата</h4>
-                        <button class="big-btn success" style="margin-top:0;" onclick="markOrderPaid(${{data.id}})">
-                            ✅ Гроші отримано (Викуп)
-                        </button>
-                        <p style="font-size:0.8rem; color:#777; margin:8px 0 0 0; line-height:1.3;">Натисніть при видачі кур'єру (якщо він одразу платить), або після його повернення з доставки.</p>
-                    </div>`;
-                }} else if (data.payment_method === 'cash' && data.is_cash_turned_in) {{
-                    cashBtnHtml = `<div style="background:#e8f5e9; color:#27ae60; padding:15px; border-radius:8px; margin-bottom:15px; text-align:center; font-weight:bold; font-size:1.1rem;"><i class="fa-solid fa-check-circle"></i> Готівку отримано (Сплачено)</div>`;
-                }}
                 
                 // --- GENERATE COMMENT HTML ---
                 let commentHtml = "";
@@ -857,12 +859,25 @@ STAFF_DASHBOARD_HTML = """
             const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
             const saveBtn = `<button class="big-btn" style="margin-top:auto;" onclick="saveOrderChanges()">💾 Зберегти зміни (~${{currentTotal.toFixed(2)}} грн)</button>`;
 
-            // --- НОВЫЙ ИНТЕРФЕЙС С ТАБАМИ ---
+            // Подготавливаем HTML со статусами (вытягиваем из табов)
+            let statusSelectHtml = "";
+            if (statusOptions) {{
+                statusSelectHtml = `
+                <div style="margin-bottom:15px; background:#f9f9f9; padding:12px; border-radius:12px; border:1px solid #ddd;">
+                    <label style="font-size:0.85rem; color:#666; display:block; margin-bottom:8px;">Статус замовлення:</label>
+                    <select id="status-select" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ccc; background:#fff; font-size:1.1rem; font-weight:bold;" onchange="changeOrderStatus(this)">
+                        ${{statusOptions}}
+                    </select>
+                </div>`;
+            }}
+
             body.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0;">Замовлення #${{orderIdStr}}</h3>
                     <div style="font-size:1.2rem; font-weight:bold; color:var(--primary);">${{currentTotal.toFixed(2)}} грн</div>
                 </div>
+                
+                ${{statusSelectHtml}}
                 
                 <div class="tabs">
                     <div class="tab-btn active" onclick="switchOrderTab('tab-items')"><i class="fa-solid fa-utensils"></i> Склад</div>
@@ -887,15 +902,7 @@ STAFF_DASHBOARD_HTML = """
 
                 <div id="tab-manage" class="tab-content" style="overflow-y:auto;">
                     ${{paymentHtml}}
-                    ${{cashBtnHtml}}
-                    ${{statusOptions ? `
-                    <div style="margin-bottom:15px; background:#f9f9f9; padding:15px; border-radius:12px; border:1px solid #eee;">
-                        <label style="font-size:0.85rem; color:#666; display:block; margin-bottom:8px;">Статус замовлення:</label>
-                        <select id="status-select" style="width:100%; padding:12px; border-radius:8px; border:1px solid #ddd; background:#fff; font-size:1.1rem; font-weight:bold;" onchange="changeOrderStatus(this)">
-                            ${{statusOptions}}
-                        </select>
-                    </div>` : ''}}
-                </div>
+                    </div>
             `;
         }}
 
@@ -1500,7 +1507,7 @@ STAFF_DASHBOARD_HTML = """
             const body = document.getElementById('modal-body');
             
             let html = `
-                <h3 style="margin-top:0; text-align:center;">💸 Нова транзакція</h3>
+                <h3 style="margin:0; text-align:center;">💸 Нова транзакція</h3>
                 
                 <div class="toggle-switch">
                     <div class="toggle-option active income" onclick="toggleTransType(this, 'in')">📥 Внесення</div>
