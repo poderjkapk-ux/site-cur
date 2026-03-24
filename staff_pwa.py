@@ -1,8 +1,10 @@
 # staff_pwa.py
 
+import os
 import html
 import logging
 import json
+import httpx
 import urllib.parse
 from decimal import Decimal
 from datetime import timedelta
@@ -58,7 +60,41 @@ from websocket_manager import manager
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
 logger = logging.getLogger(__name__)
 
+# --- КОНФІГУРАЦІЯ RESTIFY ---
+# Можна винести в змінні оточення або налаштування БД. 
+RESTIFY_BASE_URL = os.environ.get("RESTIFY_BASE_URL", "http://lander_app:8001")
+
+
 # --- ДОПОМІЖНІ ФУНКЦІЇ ---
+
+async def get_restify_token(session: AsyncSession) -> str:
+    """Отримує або оновлює токен авторизації на зовнішньому сервісі Restify"""
+    settings = await session.get(Settings, 1)
+    if not settings or not settings.restify_email or not settings.restify_password:
+        raise HTTPException(status_code=400, detail="Інтеграцію з Restify не налаштовано в адмін-панелі.")
+        
+    # Якщо токен вже збережений, використовуємо його (в ідеалі тут перевіряти JWT expiration)
+    if settings.restify_token:
+        return settings.restify_token
+        
+    # Робимо авторизацію
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(f"{RESTIFY_BASE_URL}/api/partner/login_native", data={
+                "email": settings.restify_email,
+                "password": settings.restify_password
+            })
+            if resp.status_code == 200:
+                token = resp.cookies.get("partner_token")
+                if token:
+                    settings.restify_token = token
+                    await session.commit()
+                    return token
+        except Exception as e:
+            logger.error(f"Restify Auth Error: {e}")
+            
+    raise HTTPException(status_code=401, detail="Не вдалося авторизуватись на Restify. Перевірте логін та пароль в налаштуваннях.")
+
 
 def check_edit_permissions(employee: Employee, order: Order) -> bool:
     """
@@ -650,14 +686,13 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
         debtors_html = "<div style='text-align:center; color:#999; padding:15px;'>Всі гроші здано ✅</div>"
 
     # 4. Неоплачені накладні (Покращене відображення)
-    # Фільтруємо: Тільки 'supply', тільки проведені, і тільки ті, де Є ПОСТАЧАЛЬНИК (виключаємо внутрішнє виробництво напівфабрикатів)
     docs_res = await session.execute(
         select(InventoryDoc)
         .options(selectinload(InventoryDoc.items), joinedload(InventoryDoc.supplier))
         .where(
             InventoryDoc.doc_type == 'supply', 
             InventoryDoc.is_processed == True,
-            InventoryDoc.supplier_id != None  # <--- Ігноруємо внутрішні акти (П/Ф)
+            InventoryDoc.supplier_id != None 
         )
         .order_by(InventoryDoc.created_at.desc())
     )
@@ -666,7 +701,6 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     unpaid_html = ""
     for d in docs:
         total = sum(i.quantity * i.price for i in d.items)
-        # Уникаємо ділення на нуль та помилок з None
         paid = Decimal(str(d.paid_amount or 0))
         debt = total - paid
         
@@ -677,10 +711,9 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
             date_str = d.created_at.strftime('%d.%m')
             time_str = d.created_at.strftime('%H:%M')
             
-            # Стиль прогрес-бару
-            bar_color = "#e74c3c" # Червоний
-            if percent_paid > 50: bar_color = "#f39c12" # Помаранчевий
-            if percent_paid > 90: bar_color = "#27ae60" # Зелений
+            bar_color = "#e74c3c"
+            if percent_paid > 50: bar_color = "#f39c12"
+            if percent_paid > 90: bar_color = "#27ae60"
 
             unpaid_html += f"""
             <div class="invoice-card">
@@ -712,7 +745,6 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     if not unpaid_html:
         unpaid_html = "<div style='text-align:center; padding:25px; color:#999; background:#f9f9f9; border-radius:12px;'>Немає неоплачених накладних 🎉</div>"
 
-    # Додаткові CSS стилі для нових карток
     styles = """
     <style>
         .invoice-card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #eee; }
@@ -766,25 +798,16 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
-    """
-    Генерація списку замовлень для екрану виробництва (Кухня/Бар).
-    Суворо використовує прапорці з бази даних та нормалізує типи ID.
-    """
     orders_data = []
-    
-    # Конвертуємо JSON IDs у список цілих чисел для надійного порівняння
     raw_workshop_ids = employee.assigned_workshop_ids or []
     my_workshop_ids = []
     for wid in raw_workshop_ids:
-        try:
-            my_workshop_ids.append(int(wid))
-        except (ValueError, TypeError):
-            pass
+        try: my_workshop_ids.append(int(wid))
+        except: pass
             
     is_kitchen = employee.role.can_receive_kitchen_orders
     is_bar = employee.role.can_receive_bar_orders
 
-    # Надійний запит: беремо ТІЛЬКИ ті замовлення, статус яких має прапорець requires_kitchen_notify
     q = select(Order).join(OrderStatus).options(
         joinedload(Order.table), 
         selectinload(Order.items).joinedload(OrderItem.product), 
@@ -808,11 +831,9 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                 prod_wh_id = item.product.production_warehouse_id
                 area = item.preparation_area
                 
-                # Логіка 1: Перевірка по цехах (з урахуванням виправлених типів)
                 if my_workshop_ids and prod_wh_id is not None:
                     if int(prod_wh_id) in my_workshop_ids:
                         is_my_item = True
-                # Логіка 2: Базова перевірка по ролях (якщо цехи не налаштовані)
                 else:
                     if area == 'bar' and is_bar:
                         is_my_item = True
@@ -845,7 +866,7 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                     """
             
             if count_total_my_items > 0:
-                if count_active_my_items == 0: continue # Все готово, приховуємо
+                if count_active_my_items == 0: continue
 
                 table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                 
@@ -883,11 +904,8 @@ async def _get_my_courier_orders(session: AsyncSession, employee: Employee):
             items_html_list.append(f"<div style='{style}'>{icon} {html.escape(item.product_name)} x{item.quantity}</div>")
         
         items_block = "".join(items_html_list)
-
-        # Определение метода оплаты
         pay_method = "Готівка 💵" if o.payment_method == "cash" else "Картка 💳"
         
-        # Контент карточки со всей информацией
         content = f"""
         <div class="info-row"><i class="fa-solid fa-user"></i> <b>{html.escape(o.customer_name or 'Клієнт не вказаний')}</b></div>
         <div class="info-row"><i class="fa-solid fa-phone"></i> <a href="tel:{o.phone_number}" style="color:#3498db; text-decoration:none; font-weight:bold;">{html.escape(o.phone_number or 'Немає номеру')}</a></div>
@@ -904,7 +922,6 @@ async def _get_my_courier_orders(session: AsyncSession, employee: Employee):
         if o.kitchen_done and o.bar_done: status_text = "📦 ВСЕ ГОТОВО"
         elif o.kitchen_done: status_text = "🍳 Кухня готова"
         
-        # Кнопка навигации для курьера
         safe_address = urllib.parse.quote(o.address) if o.address else ""
         nav_btn = f"<a href='https://www.google.com/maps/search/?api=1&query={safe_address}' target='_blank' class='action-btn' style='background:#27ae60; color:white; text-decoration:none;'><i class='fa-solid fa-location-arrow'></i> Навігація</a>" if o.address else ""
         
@@ -939,6 +956,11 @@ async def _get_all_delivery_orders_for_admin(session: AsyncSession, employee: Em
     res = []
     for o in orders:
         courier_info = f"🚴 {o.courier.full_name}" if o.courier else "<span style='color:red'>🔴 Не призначено</span>"
+        
+        # Перевірка на Restify кур'єра
+        if o.restify_job_id:
+             courier_info = f"🚀 Restify ({o.restify_status or 'В пошуку'})"
+
         pay_method = "Готівка 💵" if o.payment_method == "cash" else "Картка 💳"
         
         content = f"""
@@ -953,14 +975,23 @@ async def _get_all_delivery_orders_for_admin(session: AsyncSession, employee: Em
         
         btns = f"<button class='action-btn' onclick=\"openOrderEditModal({o.id})\">⚙️ Призначити / Змінити</button>"
         
+        badge_class = "info"
+        card_color = "#3498db"
+        if not o.courier and not o.restify_job_id:
+             badge_class = "warning"
+             card_color = "#e67e22"
+        elif o.restify_job_id:
+             badge_class = "success"
+             card_color = "#166534"
+        
         res.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
             id=o.id, 
             time=o.created_at.strftime('%H:%M'), 
-            badge_class="warning" if not o.courier else "info", 
+            badge_class=badge_class, 
             status=o.status.name, 
             content=content, 
             buttons=btns, 
-            color="#e67e22" if not o.courier else "#3498db"
+            color=card_color
         )})
     return res
 
@@ -974,7 +1005,6 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
     orders = (await session.execute(q)).scalars().all()
     res = []
     
-    # --- НОВА КНОПКА ---
     create_btn = """
     <div style="margin-bottom: 15px;">
         <button class="big-btn success" onclick="startDeliveryCreation()">
@@ -983,7 +1013,6 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
     </div>
     """
     res.append({"id": 0, "html": create_btn})
-    # --------------------
 
     for o in orders:
         table_name = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
@@ -992,6 +1021,9 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
         extra_info = ""
         if o.is_delivery:
             courier_name = o.courier.full_name if o.courier else "Не призначено"
+            if o.restify_job_id:
+                courier_name = f"🚀 Restify ({o.restify_status})"
+                
             extra_info = f"""
             <div class='info-row'><i class="fa-solid fa-user"></i> {html.escape(o.customer_name or 'Клієнт')}</div>
             <div class='info-row'><i class="fa-solid fa-phone"></i> {html.escape(o.phone_number or '')}</div>
@@ -1088,21 +1120,110 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         "statuses": status_list,
         "status_id": order.status_id,
         "is_delivery": order.is_delivery,
-        
-        # --- ОНОВЛЕНО: Додано delivery_time ---
         "customer_name": order.customer_name,
         "phone_number": order.phone_number,
         "address": order.address,
-        "delivery_time": order.delivery_time, # <--- ДОДАНО: Час доставки
-        "comment": order.comment,             # <--- ЗМІНЕНО: тепер це поле comment
+        "delivery_time": order.delivery_time,
+        "comment": order.comment,             
         "payment_method": order.payment_method,
         "created_at": order.created_at.strftime('%H:%M'),
-        # ----------------------------------------------------------------
-
         "couriers": couriers_list,
         "can_assign_courier": employee.role.can_manage_orders,
-        "can_edit_items": check_edit_permissions(employee, order)
+        "can_edit_items": check_edit_permissions(employee, order),
+        
+        # --- ІНТЕГРАЦІЯ З RESTIFY ---
+        "restify_job_id": order.restify_job_id,
+        "restify_status": order.restify_status
+        # ----------------------------
     })
+
+# --- НОВІ ЕНДПОІНТИ ДЛЯ RESTIFY ---
+@router.post("/api/restify/call_courier")
+async def call_restify_courier(
+    request: Request, session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    delivery_fee = float(data.get("delivery_fee", 80.0))
+    prep_time = int(data.get("prep_time", 15))
+    payment_type = data.get("payment_type", "prepaid")
+    
+    order = await session.get(Order, order_id)
+    if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
+    if not order.is_delivery: return JSONResponse({"error": "Замовлення не є доставкою"}, 400)
+    
+    token = await get_restify_token(session)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{RESTIFY_BASE_URL}/api/partner/create_order_native",
+                data={
+                    "dropoff_address": order.address or "Не вказано",
+                    "customer_phone": order.phone_number or "0000000000",
+                    "customer_name": order.customer_name or "Клієнт",
+                    "order_price": float(order.total_price),
+                    "delivery_fee": delivery_fee,
+                    "comment": order.comment or "",
+                    "payment_type": payment_type,
+                    "is_return_required": False,
+                    "prep_time": prep_time
+                },
+                cookies={"partner_token": token},
+                timeout=10.0
+            )
+            
+            if resp.status_code == 200:
+                res_data = resp.json()
+                if res_data.get("status") == "ok":
+                    order.restify_job_id = res_data["job_id"]
+                    order.restify_status = "pending"
+                    
+                    session.add(OrderLog(order_id=order.id, message=f"Викликано кур'єра Restify. Вартість доставки: {delivery_fee} грн", actor=f"{employee.full_name} (PWA)"))
+                    await session.commit()
+                    
+                    # Оновлення для персоналу через WS
+                    await manager.broadcast_staff({
+                        "type": "order_updated",
+                        "order_id": order.id
+                    })
+                    
+                    return JSONResponse({"success": True, "restify_job_id": order.restify_job_id})
+                else:
+                    return JSONResponse({"error": res_data.get("message", "Помилка Restify")}, 400)
+            else:
+                return JSONResponse({"error": f"Помилка сервера Restify: {resp.status_code}"}, 400)
+        except Exception as e:
+            logger.error(f"Restify Call Error: {e}")
+            return JSONResponse({"error": "Помилка з'єднання з Restify"}, 500)
+
+@router.get("/api/restify/track/{order_id}")
+async def track_restify_courier(order_id: int, session: AsyncSession = Depends(get_db_session)):
+    order = await session.get(Order, order_id)
+    if not order or not order.restify_job_id:
+        return JSONResponse({"error": "Немає прив'язки до Restify"}, 404)
+        
+    token = await get_restify_token(session)
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{RESTIFY_BASE_URL}/api/partner/track_courier/{order.restify_job_id}",
+                cookies={"partner_token": token},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if "job_status" in data and data["job_status"] != order.restify_status:
+                    order.restify_status = data["job_status"]
+                    await session.commit()
+                return JSONResponse(data)
+        except Exception as e:
+            logger.error(f"Restify Track Error: {e}")
+            
+    return JSONResponse({"error": "Failed to fetch tracking"}, 500)
+# ----------------------------------
+
 
 @router.post("/api/order/assign_courier")
 async def assign_courier_api(
@@ -1110,10 +1231,6 @@ async def assign_courier_api(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """
-    ВИПРАВЛЕНО: Тепер ця функція не тільки створює сповіщення в PWA,
-    а й відправляє повноцінне повідомлення в Telegram кур'єру.
-    """
     if not employee.role.can_manage_orders:
         return JSONResponse({"error": "Заборонено"}, status_code=403)
         
@@ -1141,13 +1258,10 @@ async def assign_courier_api(
         order.courier_id = courier_id
         msg = f"Призначено: {courier.full_name}"
         
-        # ЛОГ
         session.add(OrderLog(order_id=order.id, message=f"Призначено кур'єра: {courier.full_name}", actor=actor_info))
         
-        # Відправляємо внутрішнє сповіщення в PWA
         await create_staff_notification(session, courier.id, f"📦 Вам призначено замовлення #{order.id} ({order.address or 'Доставка'})")
         
-        # --- ДОДАНО ДЛЯ ВІДПРАВКИ В TELEGRAM ПРЯМО З PWA ---
         admin_bot = request.app.state.admin_bot
         if courier.telegram_user_id and admin_bot:
             try:
@@ -1155,7 +1269,6 @@ async def assign_courier_api(
                 statuses_res = await session.execute(select(OrderStatus).where(OrderStatus.visible_to_courier == True).order_by(OrderStatus.id))
                 statuses = statuses_res.scalars().all()
 
-                # Розбиваємо кнопки по 2
                 status_buttons = [
                     InlineKeyboardButton(text=s.name, callback_data=f"staff_set_status_{order.id}_{s.id}")
                     for s in statuses
@@ -1163,7 +1276,6 @@ async def assign_courier_api(
                 for i in range(0, len(status_buttons), 2):
                     kb_courier.row(*status_buttons[i:i+2])
 
-                # Формуємо безпечне посилання на карту для Telegram
                 if order.is_delivery and order.address:
                     encoded_address = quote_plus(order.address)
                     map_url = f"https://www.google.com/maps/search/?api=1&query={encoded_address}"
@@ -1177,7 +1289,6 @@ async def assign_courier_api(
                 )
             except Exception as e:
                 logger.error(f"Не вдалося сповістити в TG кур'єра {courier.telegram_user_id} з PWA: {e}")
-        # ----------------------------------------------------
     
     await session.commit()
     return JSONResponse({"success": True, "message": msg})
@@ -1208,12 +1319,9 @@ async def update_order_status_api(
     new_status = await session.get(OrderStatus, new_status_id)
     actor_info = f"{employee.full_name} (PWA)"
     
-    # --- НОВА ПЕРЕВІРКА ПРАВ НА СКАСУВАННЯ ---
     if new_status.is_cancelled_status:
-        # Перевіряємо, чи є у співробітника право скасовувати замовлення
         if not employee.role.can_cancel_orders:
             return JSONResponse({"error": "⛔️ У вас немає прав скасовувати замовлення! Зверніться до адміністратора."}, status_code=403)
-    # -------------------------------------
     
     is_already_closed = order.status.is_completed_status or order.status.is_cancelled_status
     is_moving_to_cancelled = new_status.is_cancelled_status
@@ -1223,7 +1331,6 @@ async def update_order_status_api(
         if not (is_moving_to_cancelled or is_moving_to_active):
              return JSONResponse({"error": "Замовлення закрите. Зміна заборонена."}, 400)
 
-    # Скасування боргу при переході з Виконано в Скасовано
     if order.status.is_completed_status and new_status.is_cancelled_status:
         await unregister_employee_debt(session, order)
         session.add(OrderLog(order_id=order.id, message="Скасовано борг співробітника", actor=actor_info))
@@ -1234,7 +1341,6 @@ async def update_order_status_api(
 
     order.status_id = new_status.id
     
-    # Нарахування боргу при завершенні
     if new_status.is_completed_status:
         if order.is_delivery:
              if order.courier_id:
@@ -1259,7 +1365,6 @@ async def update_order_status_api(
         request.app.state.admin_bot, request.app.state.client_bot, session
     )
     
-    # --- ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
     await manager.broadcast_staff({
         "type": "order_updated",
         "order_id": order.id
@@ -1267,23 +1372,19 @@ async def update_order_status_api(
 
     return JSONResponse({"success": True})
 
-# --- НОВИЙ API ДЛЯ СКЛАДНОГО СКАСУВАННЯ (Як в Telegram) ---
 @router.post("/api/order/cancel_complex")
 async def cancel_order_complex_api(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """
-    Складне скасування: Списання (Waste) або Повернення (Return) + Штраф.
-    """
     if not employee.role.can_cancel_orders:
         return JSONResponse({"error": "Немає прав на скасування"}, status_code=403)
 
     data = await request.json()
     order_id = int(data.get("orderId"))
-    action_type = data.get("actionType") # 'return' (на склад) або 'waste' (списати)
-    apply_penalty = data.get("applyPenalty", False) # Нараховувати борг по собівартості
+    action_type = data.get("actionType") 
+    apply_penalty = data.get("applyPenalty", False) 
     reason = data.get("reason", "Скасування через PWA")
     
     actor_info = f"{employee.full_name} (PWA)"
@@ -1291,35 +1392,24 @@ async def cancel_order_complex_api(
     order = await session.get(Order, order_id, options=[joinedload(Order.status)])
     if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
 
-    # Знаходимо статус скасування
     cancel_status = await session.scalar(select(OrderStatus).where(OrderStatus.is_cancelled_status == True).limit(1))
     if not cancel_status: return JSONResponse({"error": "Статус скасування не налаштовано"}, 500)
 
     old_status_name = order.status.name
 
-    # --- ВИПРАВЛЕННЯ: Списуємо старий борг ---
-    # Якщо замовлення було "Виконано", то борг (вся сума) висить на співробітнику.
-    # При скасуванні ми повинні цей борг анулювати.
     if order.status.is_completed_status:
         await unregister_employee_debt(session, order)
         session.add(OrderLog(order_id=order.id, message="Скасовано борг співробітника", actor=actor_info))
-    # ------------------------------------------
 
-    # 1. Логіка Складу
     if action_type == 'waste':
-        # Якщо "Списати", ми ставимо прапор, щоб notification_manager НЕ робив reverse_deduction
         order.skip_inventory_return = True
     else:
-        # Якщо "Повернути", notification_manager сам викличе reverse_deduction при зміні статусу
         order.skip_inventory_return = False
 
-    # 2. Логіка Штрафу (Якщо Waste і вибрано)
     debt_msg = ""
     if action_type == 'waste' and apply_penalty:
-        # Рахуємо собівартість
         cost_price = await calculate_order_prime_cost(session, order.id)
         if cost_price > 0:
-            # На кого вішати? (Офіціант або Кур'єр)
             target_id = order.accepted_by_waiter_id or order.courier_id or employee.id
             target_emp = await session.get(Employee, target_id)
             
@@ -1333,11 +1423,9 @@ async def cancel_order_complex_api(
                 ))
                 debt_msg = f" (Нараховано борг {cost_price:.2f} грн співробітнику {target_emp.full_name})"
 
-    # 3. Змінюємо статус
     order.status_id = cancel_status.id
     order.cancellation_reason = reason + debt_msg
     
-    # ЛОГ СКАСУВАННЯ
     log_msg = f"Скасовано: {reason}. Тип: {'Списання' if action_type == 'waste' else 'Повернення'}.{debt_msg}"
     session.add(OrderLog(order_id=order.id, message=log_msg, actor=actor_info))
     
@@ -1349,13 +1437,11 @@ async def cancel_order_complex_api(
     
     await session.commit()
 
-    # 4. Сповіщення
     await notify_all_parties_on_status_change(
         order, old_status_name, actor_info, 
         request.app.state.admin_bot, request.app.state.client_bot, session
     )
 
-    # --- ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
     await manager.broadcast_staff({
         "type": "order_updated",
         "order_id": order.id
@@ -1391,14 +1477,12 @@ async def update_order_items_api(
     if order.is_inventory_deducted:
         return JSONResponse({"error": "Склад вже списано. Редагування заборонено."}, 403)
     
-    # --- ЛОГУВАННЯ РІЗНИЦІ ---
     old_items_map = {item.product_id: item.quantity for item in order.items}
-    # -------------------------
     
     await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
     
     total_price = Decimal(0)
-    current_items_map = {} # Для логування
+    current_items_map = {} 
     
     if items:
         prod_ids = [int(i['id']) for i in items]
@@ -1412,7 +1496,7 @@ async def update_order_items_api(
             qty = int(item['qty'])
             if pid in prod_map and qty > 0:
                 p = prod_map[pid]
-                current_items_map[pid] = {"name": p.name, "qty": qty} # Для логування
+                current_items_map[pid] = {"name": p.name, "qty": qty}
                 
                 final_mods = []
                 mods_price = Decimal(0)
@@ -1427,7 +1511,7 @@ async def update_order_items_api(
                             "price": float(m_db.price),
                             "ingredient_id": m_db.ingredient_id,
                             "ingredient_qty": float(m_db.ingredient_qty),
-                            "warehouse_id": m_db.warehouse_id # Зберігаємо склад модифікатора
+                            "warehouse_id": m_db.warehouse_id 
                         })
                 
                 item_price = p.price + mods_price
@@ -1443,23 +1527,20 @@ async def update_order_items_api(
                     modifiers=final_mods
                 ))
     
-    # --- ЗАПИС ЛОГУ РІЗНИЦІ ---
     log_diffs = []
-    # Додано/Змінено
     for pid, info in current_items_map.items():
         old_qty = old_items_map.get(pid, 0)
         if old_qty == 0:
             log_diffs.append(f"Додано: {info['name']} x{info['qty']}")
         elif old_qty != info['qty']:
             log_diffs.append(f"Змінено к-сть: {info['name']} ({old_qty} -> {info['qty']})")
-    # Видалено
+            
     for pid, old_qty in old_items_map.items():
         if pid not in current_items_map:
              log_diffs.append(f"Видалено товар (ID: {pid})")
     
     if log_diffs:
          session.add(OrderLog(order_id=order.id, message="Зміни в товарах: " + "; ".join(log_diffs), actor=actor_info))
-    # --------------------------
     
     if order.is_delivery:
         settings = await session.get(Settings, 1) or Settings()
@@ -1480,7 +1561,6 @@ async def update_order_items_api(
     for c in chefs:
         await create_staff_notification(session, c.id, msg)
         
-    # --- ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
     await manager.broadcast_staff({
         "type": "order_updated",
         "order_id": order.id
@@ -1488,30 +1568,24 @@ async def update_order_items_api(
 
     return JSONResponse({"success": True})
 
-# --- НОВИЙ ENDPOINT: ОНОВЛЕННЯ ДЕТАЛЕЙ ЗАМОВЛЕННЯ ---
 @router.post("/api/order/update_details")
 async def update_order_details_api(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """
-    Оновлення даних клієнта та коментаря
-    """
     data = await request.json()
     order_id = int(data.get("orderId"))
     
-    # Отримуємо нові дані
     name = data.get("name")
     phone = data.get("phone")
     address = data.get("address")
     delivery_time = data.get("delivery_time")
-    comment = data.get("comment") # Тепер це записуємо в order.comment
+    comment = data.get("comment")
     
     order = await session.get(Order, order_id)
     if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
     
-    # Перевірка прав (аналогічно update_items)
     if not check_edit_permissions(employee, order):
         return JSONResponse({"error": "Немає прав на редагування"}, 403)
 
@@ -1521,7 +1595,6 @@ async def update_order_details_api(
     actor_info = f"{employee.full_name} (PWA)"
     changes = []
 
-    # Логуємо зміни
     if order.customer_name != name:
         changes.append(f"Ім'я: {order.customer_name} -> {name}")
         order.customer_name = name
@@ -1550,7 +1623,6 @@ async def update_order_details_api(
         ))
         await session.commit()
         
-        # --- ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
         await manager.broadcast_staff({
             "type": "order_updated",
             "order_id": order.id
@@ -1559,7 +1631,6 @@ async def update_order_details_api(
         return JSONResponse({"success": True, "message": "Дані оновлено"})
     
     return JSONResponse({"success": True, "message": "Змін немає"})
-# ----------------------------------------------------
 
 @router.post("/api/action")
 async def handle_action_api(
@@ -1577,14 +1648,11 @@ async def handle_action_api(
             item_id = int(data.get("extra"))
             item = await session.get(OrderItem, item_id)
             if item:
-                # Поштучна готовність
                 item.is_ready = not item.is_ready
                 await session.commit()
                 
-                # Перевірка готовності всього замовлення
                 await check_and_update_order_readiness(session, order_id, request.app.state.admin_bot)
                 
-                # --- ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
                 await manager.broadcast_staff({
                     "type": "item_ready",
                     "order_id": order_id
@@ -1597,14 +1665,12 @@ async def handle_action_api(
             if order and not order.accepted_by_waiter_id:
                 order.accepted_by_waiter_id = employee.id
                 
-                # ЛОГ ПРИЙНЯТТЯ
                 session.add(OrderLog(order_id=order.id, message="Офіціант прийняв замовлення", actor=actor_info))
                 
                 proc_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "В обробці").limit(1))
                 if proc_status: order.status_id = proc_status.id
                 await session.commit()
                 
-                # --- ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
                 await manager.broadcast_staff({
                     "type": "order_updated",
                     "order_id": order.id
@@ -1619,9 +1685,6 @@ async def handle_action_api(
 
 @router.get("/api/menu/full")
 async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
-    """
-    Повертає повне меню ресторану для PWA.
-    """
     cats = (await session.execute(select(Category).where(Category.show_in_restaurant==True).order_by(Category.sort_order))).scalars().all()
     
     menu = []
@@ -1649,7 +1712,7 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
                 "name": p.name, 
                 "price": float(p.price), 
                 "preparation_area": p.preparation_area,
-                "production_warehouse_id": p.production_warehouse_id, # Важливо для фільтрації
+                "production_warehouse_id": p.production_warehouse_id,
                 "modifiers": p_mods 
             })
             
@@ -1680,13 +1743,12 @@ async def create_waiter_order(
         
         total = Decimal(0)
         items_obj = []
-        log_items = [] # Для логу
+        log_items = [] 
         
         prod_ids = [int(item['id']) for item in cart]
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
         
-        # --- Завантажуємо модифікатори для отримання warehouse_id ---
         all_mod_ids = set()
         for item in cart:
             for raw_mod in item.get('modifiers', []):
@@ -1697,7 +1759,6 @@ async def create_waiter_order(
             res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
             for m in res.scalars().all():
                 db_modifiers[m.id] = m
-        # ---------------------------------------------------------------
         
         for item in cart:
             pid = int(item['id'])
@@ -1705,7 +1766,7 @@ async def create_waiter_order(
             
             if pid in products_map and qty > 0:
                 prod = products_map[pid]
-                log_items.append(f"{prod.name} x{qty}") # Логуємо
+                log_items.append(f"{prod.name} x{qty}")
                 
                 final_mods = []
                 mods_price = Decimal(0)
@@ -1715,14 +1776,13 @@ async def create_waiter_order(
                         m_db = db_modifiers[mid]
                         mods_price += m_db.price
                         
-                        # Зберігаємо всі дані для списання, включаючи warehouse_id
                         final_mods.append({
                             "id": m_db.id,
                             "name": m_db.name,
                             "price": float(m_db.price),
                             "ingredient_id": m_db.ingredient_id,
                             "ingredient_qty": float(m_db.ingredient_qty),
-                            "warehouse_id": m_db.warehouse_id # <--- ВАЖЛИВО ДЛЯ СПИСАННЯ
+                            "warehouse_id": m_db.warehouse_id
                         })
                 
                 item_price = prod.price + mods_price
@@ -1734,7 +1794,7 @@ async def create_waiter_order(
                     quantity=qty, 
                     price_at_moment=item_price,
                     preparation_area=prod.preparation_area,
-                    modifiers=final_mods # JSON з warehouse_id
+                    modifiers=final_mods
                 ))
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))
@@ -1759,12 +1819,10 @@ async def create_waiter_order(
             item_data.order_id = order.id
             session.add(item_data)
         
-        # ЛОГ СТВОРЕННЯ
         actor_info = f"{employee.full_name} (PWA)"
         session.add(OrderLog(order_id=order.id, message=f"Створено замовлення (Офіціант). Склад: {', '.join(log_items)}", actor=actor_info))
 
         await session.commit()
-        
         await session.refresh(order, ['status'])
         
         session.add(OrderStatusHistory(order_id=order.id, status_id=status_id, actor_info=actor_info))
@@ -1772,7 +1830,6 @@ async def create_waiter_order(
         
         await notify_new_order_to_staff(request.app.state.admin_bot, order, session)
         
-        # --- МИТТЄВЕ ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
         await manager.broadcast_staff({
             "type": "new_order",
             "message": f"Нове замовлення #{order.id} (Стіл: {table.name})"
@@ -1785,9 +1842,7 @@ async def create_waiter_order(
 
 @router.get("/print_recipe/{order_id}")
 async def print_recipe(order_id: int, session: AsyncSession = Depends(get_db_session)):
-    """Генерація HTML чека/бігунка для кухаря"""
     from inventory_service import generate_cook_ticket 
-    
     try:
         html_content = await generate_cook_ticket(session, order_id)
         return HTMLResponse(html_content)
@@ -1819,7 +1874,6 @@ async def cashier_api_action(
             shift = await get_any_open_shift(session)
             if not shift: return JSONResponse({"error": "Зміна не знайдена"}, 400)
             
-            # Для простоти закриваємо по теоретичному залишку, або можна запитати факт
             stats = await get_shift_statistics(session, shift.id)
             actual_cash = Decimal(str(data.get("actual_cash", stats['theoretical_cash'])))
             
@@ -1831,13 +1885,11 @@ async def cashier_api_action(
             shift = await get_any_open_shift(session)
             if not shift: return JSONResponse({"error": "Відкрийте зміну!"}, 400)
             
-            # Знаходимо замовлення з боргом
-            # --- ВИПРАВЛЕННЯ: Фільтр скасованих ---
             orders_res = await session.execute(
                 select(Order.id).where(
                     Order.payment_method == 'cash',
                     Order.is_cash_turned_in == False,
-                    Order.status.has(is_cancelled_status=False), # <--- Фільтр
+                    Order.status.has(is_cancelled_status=False),
                     or_(
                         Order.courier_id == target_emp_id,
                         Order.accepted_by_waiter_id == target_emp_id,
@@ -1857,7 +1909,7 @@ async def cashier_api_action(
             shift = await get_any_open_shift(session)
             if not shift: return JSONResponse({"error": "Відкрийте зміну!"}, 400)
             
-            t_type = data.get("type") # 'in' or 'out'
+            t_type = data.get("type") 
             amount = Decimal(str(data.get("amount")))
             comment = data.get("comment")
             
@@ -1873,11 +1925,8 @@ async def get_suppliers_and_warehouses(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """Отримання даних для форми приходу."""
     suppliers = (await session.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
     warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
-    
-    # Повертаємо також всі інгредієнти для пошуку
     from inventory_models import Ingredient, Unit
     ingredients = (await session.execute(select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))).scalars().all()
     
@@ -1898,12 +1947,11 @@ async def create_supply_pwa(
         
     data = await request.json()
     try:
-        items = data.get("items", []) # List of {ingredient_id, qty, price}
+        items = data.get("items", []) 
         supplier_id = int(data.get("supplier_id"))
         warehouse_id = int(data.get("warehouse_id"))
         comment = data.get("comment", "PWA Supply")
         
-        # Використовуємо універсальну функцію
         await process_movement(
             session, 'supply', items,
             target_wh_id=warehouse_id,
@@ -1921,7 +1969,6 @@ async def pay_supply_doc_pwa(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """Оплата накладної з каси через PWA."""
     if not employee.role.can_manage_orders:
         return JSONResponse({"error": "Forbidden"}, 403)
         
@@ -1966,20 +2013,18 @@ async def create_staff_delivery_order(
         phone = data.get("phone")
         address = data.get("address")
         comment = data.get("comment", "")
-        # Отримуємо час доставки з запиту, або ставимо "Якнайшвидше"
         delivery_time = data.get("delivery_time", "Якнайшвидше")
         
         if not cart: return JSONResponse({"error": "Кошик порожній"}, status_code=400)
         
         total = Decimal(0)
         items_obj = []
-        log_items = [] # Для логу
+        log_items = [] 
         
         prod_ids = [int(item['id']) for item in cart]
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
         
-        # Завантаження модифікаторів
         all_mod_ids = set()
         for item in cart:
             for raw_mod in item.get('modifiers', []):
@@ -1997,7 +2042,7 @@ async def create_staff_delivery_order(
             
             if pid in products_map and qty > 0:
                 prod = products_map[pid]
-                log_items.append(f"{prod.name} x{qty}") # Логуємо
+                log_items.append(f"{prod.name} x{qty}") 
                 
                 final_mods = []
                 mods_price = Decimal(0)
@@ -2027,7 +2072,6 @@ async def create_staff_delivery_order(
                     modifiers=final_mods
                 ))
         
-        # Додаємо вартість доставки якщо є в налаштуваннях
         settings = await session.get(Settings, 1) or Settings()
         if settings.delivery_cost > 0:
              if settings.free_delivery_from is None or total < settings.free_delivery_from:
@@ -2043,10 +2087,10 @@ async def create_staff_delivery_order(
             total_price=total, 
             order_type="delivery", 
             is_delivery=True, 
-            delivery_time=delivery_time, # Зберігаємо переданий час
+            delivery_time=delivery_time, 
             status_id=status_id, 
             items=items_obj,
-            comment=comment # <--- ЗМІНЕНО: Тепер пишемо в comment
+            comment=comment 
         )
         session.add(order)
         await session.flush()
@@ -2055,7 +2099,6 @@ async def create_staff_delivery_order(
             item_data.order_id = order.id
             session.add(item_data)
         
-        # ЛОГ СТВОРЕННЯ
         actor_info = f"{employee.full_name} (PWA)"
         session.add(OrderLog(order_id=order.id, message=f"Створено доставку (Адмін PWA). Склад: {', '.join(log_items)}", actor=actor_info))
 
@@ -2065,10 +2108,8 @@ async def create_staff_delivery_order(
         session.add(OrderStatusHistory(order_id=order.id, status_id=status_id, actor_info=actor_info))
         await session.commit()
         
-        # Сповіщаємо систему
         await notify_new_order_to_staff(request.app.state.admin_bot, order, session)
         
-        # --- МИТТЄВЕ ОНОВЛЕННЯ ДЛЯ ПЕРСОНАЛУ ЧЕРЕЗ WEBSOCKET ---
         await manager.broadcast_staff({
             "type": "new_order",
             "message": f"Нова доставка #{order.id}"

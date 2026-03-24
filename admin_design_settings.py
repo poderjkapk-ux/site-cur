@@ -113,8 +113,6 @@ async def get_design_settings_page(
     )
 
     # --- ДОДАВАННЯ БЛОКУ ДЛЯ SEO ШАБЛОНІВ ТА ANALYTICS ---
-    # Ми додаємо цей HTML блок до основного body, щоб не редагувати templates.py
-    
     seo_mask_title = html.escape(settings.product_seo_mask_title or "{name} - {price} грн | {site_title}")
     seo_mask_desc = html.escape(settings.product_seo_mask_desc or "{name}. {description}")
     ga_id = html.escape(settings.google_analytics_id or "")
@@ -150,18 +148,34 @@ async def get_design_settings_page(
     </div>
     """
 
+    # --- БЛОК ІНТЕГРАЦІЇ З RESTIFY ---
+    restify_email = html.escape(settings.restify_email or "")
+    restify_password = settings.restify_password if settings.restify_password else ""
+
+    restify_html = f"""
+    <div class="card" style="margin-top: 20px; border: 2px solid #c7d2fe; background: #e0e7ff;">
+        <h3 style="margin-bottom: 15px; display:flex; align-items:center; gap:10px; color: #3730a3;">
+            <i class="fa-solid fa-rocket"></i> Інтеграція з Restify (Глобальна Доставка)
+        </h3>
+        <p style="font-size: 0.9em; color: #4338ca; margin-bottom: 15px; background: #c7d2fe; padding: 10px; border-radius: 5px;">
+            Введіть Email та Пароль від вашого акаунту <b>ресторану-партнера</b> у системі Restify. Це дозволить адміністраторам автоматично викликати кур'єрів через PWA.
+        </p>
+        
+        <div class="form-grid">
+            <div>
+                <label style="color: #3730a3;">Email від акаунту Restify</label>
+                <input type="email" name="restify_email" value="{restify_email}" placeholder="restaurant@example.com" style="border: 1px solid #a5b4fc;">
+            </div>
+            <div>
+                <label style="color: #3730a3;">Пароль від акаунту Restify</label>
+                <input type="password" name="restify_password" value="{restify_password}" placeholder="Введіть пароль" style="border: 1px solid #a5b4fc;">
+            </div>
+        </div>
+    </div>
+    """
+
     # Вставляємо нові блоки перед закриваючим тегом форми (перед кнопкою зберегти)
-    # Оскільки ми не можемо легко парсити HTML, ми просто додамо це в кінець, 
-    # але в HTML структурі ADMIN_DESIGN_SETTINGS_BODY кнопка "Зберегти" знаходиться в кінці форми.
-    # Найпростіший варіант - додати це всередину форми.
-    
-    # Знаходимо останній </div> (закриття останньої card) або кнопку submit в шаблоні
-    # Але найбезпечніше просто додати це до body_content, оскільки форма охоплює весь контент в шаблоні
-    # Однак, ADMIN_DESIGN_SETTINGS_BODY не містить тегу <form>, він вставляється в шаблон.
-    # Перевіримо структуру... ADMIN_DESIGN_SETTINGS_BODY починається з <form... і закінчується </form>
-    
-    # Вставляємо перед закриваючим тегом </form>
-    final_body = body_content.replace('</form>', f'{seo_extensions_html}<div style="height:20px;"></div></form>')
+    final_body = body_content.replace('</form>', f'{seo_extensions_html}{restify_html}<div style="height:20px;"></div></form>')
 
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["design_active"] = "active"
@@ -181,11 +195,14 @@ async def save_design_settings(
     seo_description: str = Form(""),
     seo_keywords: str = Form(""),
     
-    # --- SEO Templates & Analytics (НОВІ ПОЛЯ) ---
+    # --- SEO Templates & Analytics ---
     product_seo_mask_title: str = Form("{name} - {price} грн | {site_title}"),
     product_seo_mask_desc: str = Form("{name}. {description}"),
     google_analytics_id: str = Form(""),
-    # ---------------------------------------------
+    
+    # --- RESTIFY INTEGRATION ---
+    restify_email: str = Form(""),
+    restify_password: str = Form(""),
     
     # --- Кольори ---
     primary_color: str = Form(...),
@@ -248,6 +265,20 @@ async def save_design_settings(
     settings.product_seo_mask_desc = product_seo_mask_desc
     settings.google_analytics_id = google_analytics_id.strip() if google_analytics_id else None
     
+    # --- ЗБЕРЕЖЕННЯ RESTIFY ---
+    if restify_email and restify_email.strip():
+        settings.restify_email = restify_email.strip()
+    else:
+        settings.restify_email = None
+        settings.restify_password = None
+        settings.restify_token = None
+        
+    if restify_password and restify_password.strip():
+        # Якщо пароль змінився, очищаємо старий токен, щоб система здійснила перелогін
+        if settings.restify_password != restify_password.strip():
+            settings.restify_token = None
+        settings.restify_password = restify_password.strip()
+
     # --- Збереження кольорів ---
     settings.primary_color = primary_color
     settings.secondary_color = secondary_color

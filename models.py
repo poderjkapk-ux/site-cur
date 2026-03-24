@@ -353,10 +353,10 @@ class Order(Base):
     # Запобігає повторному списанню при багаторазовій зміні статусу
     is_inventory_deducted: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
-    # --- ДОДАТКОВО: Для логіки повернення ---
-    # Не зберігається в БД (property або тимчасовий атрибут), але в SQLAlchemy
-    # краще не додавати поля без маппінгу, якщо ми не використовуємо @hybrid_property.
-    # В даному випадку ми просто використовуємо це як динамічний атрибут в коді (setattr).
+    # --- ІНТЕГРАЦІЯ З ГЛОБАЛЬНИМ RESTIFY ---
+    restify_job_id: Mapped[Optional[int]] = mapped_column(sa.Integer, nullable=True)
+    restify_status: Mapped[Optional[str]] = mapped_column(sa.String(50), nullable=True)
+    # ---------------------------------------
 
     @property
     def products_text(self) -> str:
@@ -478,6 +478,12 @@ class Settings(Base):
     # Наприклад: "{name} - {description}. Ціна: {price} грн."
     product_seo_mask_desc: Mapped[Optional[str]] = mapped_column(sa.String(500), default="{name} - {description}. Ціна: {price} грн.")
     # ------------------------------------------
+
+    # --- ІНТЕГРАЦІЯ З ГЛОБАЛЬНИМ RESTIFY ---
+    restify_email: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
+    restify_password: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
+    restify_token: Mapped[Optional[str]] = mapped_column(sa.String(500), nullable=True) # Для кешування JWT
+    # ---------------------------------------
 
 
 class MarketingPopup(Base):

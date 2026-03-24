@@ -1,0 +1,31 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Environment variables (local)
+.env
+
+# IDE settings
+.vscode/
+.idea/
+
+# Mac OS
+.DS_Store
+
+# Static uploads (optional, usually we mount volumes for this)
+# static/images/*
+# !static/images/.keep

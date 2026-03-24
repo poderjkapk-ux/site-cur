@@ -255,6 +255,10 @@ STAFF_DASHBOARD_HTML = """
     <link rel="icon" type="image/png" href="/static/favicons/favicon-32x32.png">
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <style>
         :root {{ --primary: #333; --bg: #f4f4f4; --white: #fff; --green: #27ae60; --red: #e74c3c; --blue: #3498db; --orange: #f39c12; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: var(--bg); padding-bottom: 80px; -webkit-tap-highlight-color: transparent; user-select: none; }}
@@ -490,6 +494,16 @@ STAFF_DASHBOARD_HTML = """
             </div>
         </div>
     </div>
+    
+    <div id="restify-map-modal" class="modal">
+        <div class="modal-content" style="padding:0; height:80vh; overflow:hidden;">
+            <span class="close" onclick="closeRestifyMap()" style="background:white; border-radius:50%; width:30px; height:30px; display:flex; justify-content:center; align-items:center; box-shadow:0 2px 5px rgba(0,0,0,0.3); z-index: 2000;">&times;</span>
+            <div style="padding:15px; background:white; z-index:1000; box-shadow:0 2px 5px rgba(0,0,0,0.1); position:relative;">
+                <h3 style="margin:0; color:#3730a3;"><i class="fa-solid fa-map-location-dot"></i> Карта доставки</h3>
+            </div>
+            <div id="restify-map" style="width:100%; height:calc(100% - 50px); z-index:1;"></div>
+        </div>
+    </div>
 
     <script>
         let currentView = 'orders'; 
@@ -507,6 +521,7 @@ STAFF_DASHBOARD_HTML = """
 
         let ws = null;
         let wsRetryInterval = 1000;
+        window.trackingInterval = null;
 
         document.addEventListener('DOMContentLoaded', () => {{
             const activeBtn = document.querySelector('.nav-item.active');
@@ -578,7 +593,6 @@ STAFF_DASHBOARD_HTML = """
         function sendSystemNotification(text) {{
             if (!("Notification" in window) || Notification.permission !== "granted") return;
             
-            // Використовуємо Service Worker для відображення системного PWA-сповіщення
             if ('serviceWorker' in navigator) {{
                 navigator.serviceWorker.ready.then(function(registration) {{
                     registration.showNotification("Оновлення замовлень", {{
@@ -586,11 +600,10 @@ STAFF_DASHBOARD_HTML = """
                         icon: '/static/favicons/icon-192.png',
                         badge: '/static/favicons/favicon-32x32.png',
                         vibrate: [200, 100, 200, 100, 200],
-                        requireInteraction: true // Сповіщення висітиме, поки на нього не клікнуть
+                        requireInteraction: true
                     }});
                 }});
             }} else {{
-                // Фоллбек для старих браузерів
                 try {{ new Notification("Оновлення замовлень", {{ body: text, icon: '/static/favicons/icon-192.png' }}); }} catch (e) {{}}
             }}
         }}
@@ -702,10 +715,60 @@ STAFF_DASHBOARD_HTML = """
                         }});
                     }} else courierOptions = '<option value="0" disabled>Немає кур\\'єрів на зміні</option>';
                     
-                    courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
+                    courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр (Локальний):</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
                 }}
 
-                // --- GENERATE PAYMENT HTML (NEW) ---
+                // --- GENERATE RESTIFY HTML ---
+                let restifyHtml = "";
+                if (data.is_delivery && data.can_assign_courier) {{
+                    if (!data.restify_job_id) {{
+                        restifyHtml = `
+                        <div style="background:#e0e7ff; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #c7d2fe;">
+                            <h4 style="margin:0 0 10px 0; color:#3730a3;"><i class="fa-solid fa-rocket"></i> Викликати кур'єра Restify</h4>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+                                <div>
+                                    <label style="font-size:0.8rem; color:#4f46e5;">Час приготування</label>
+                                    <select id="res_prep_time" class="form-control" style="padding:8px;">
+                                        <option value="10">10 хв</option>
+                                        <option value="15" selected>15 хв</option>
+                                        <option value="30">30 хв</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; color:#4f46e5;">Вартість доставки</label>
+                                    <input type="number" id="res_fee" class="form-control" value="80" style="padding:8px;">
+                                </div>
+                            </div>
+                            <label style="font-size:0.8rem; color:#4f46e5;">Тип оплати кур'єром</label>
+                            <select id="res_payment" class="form-control" style="padding:8px; margin-bottom:10px;">
+                                <option value="prepaid" ${{data.payment_method === 'card' ? 'selected' : ''}}>Вже оплачено</option>
+                                <option value="buyout" ${{data.payment_method === 'cash' ? 'selected' : ''}}>Викуп (Кур'єр платить закладу)</option>
+                            </select>
+                            <button class="big-btn" style="background:#4f46e5;" onclick="callRestifyCourier(${{data.id}})">
+                                <i class="fa-solid fa-motorcycle"></i> Знайти кур'єра Restify
+                            </button>
+                        </div>`;
+                    }} else {{
+                        restifyHtml = `
+                        <div style="background:#f0fdf4; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #bbf7d0;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <h4 style="margin:0; color:#166534;"><i class="fa-solid fa-rocket"></i> Restify Кур'єр</h4>
+                                <span class="badge" style="background:#166534; color:white;" id="res-status-badge">${{data.restify_status}}</span>
+                            </div>
+                            <div id="restify-courier-info" style="font-size:0.9rem; margin-bottom:10px;">Завантаження даних...</div>
+                            <div style="display:flex; gap:10px;">
+                                <button class="action-btn" style="flex:1; background:#3b82f6;" onclick="openRestifyTrack(${{data.id}})">
+                                    <i class="fa-solid fa-map-location-dot"></i> Карта
+                                </button>
+                            </div>
+                        </div>`;
+                        
+                        if (window.trackingInterval) clearTimeout(window.trackingInterval);
+                        setTimeout(() => fetchRestifyCourierInfo(data.id), 500);
+                    }}
+                }}
+
+                // --- GENERATE PAYMENT HTML ---
                 let payStyle = data.payment_method === 'cash' ? 'background:#fff3e0; color:#e67e22;' : 'background:#e3f2fd; color:#2980b9;';
                 let payIcon = data.payment_method === 'cash' ? '<i class="fa-solid fa-money-bill-wave"></i>' : '<i class="fa-regular fa-credit-card"></i>';
                 let payText = data.payment_method === 'cash' ? 'Готівка' : 'Картка / Термінал';
@@ -713,7 +776,7 @@ STAFF_DASHBOARD_HTML = """
                     ${{payIcon}} <span>${{payText}}</span>
                 </div>`;
                 
-                // --- GENERATE COMMENT HTML (NEW) ---
+                // --- GENERATE COMMENT HTML ---
                 let commentHtml = "";
                 if (data.comment) {{
                     commentHtml = `<div style="background:#fee2e2; color:#c0392b; padding:10px; border-radius:8px; margin-bottom:15px; font-size:0.95rem; line-height:1.4; border-left: 4px solid #c0392b;">
@@ -770,12 +833,12 @@ STAFF_DASHBOARD_HTML = """
                     }});
                 }}
 
-                renderEditCart(data.can_edit_items, data.statuses, courierHtml, customerHtml, data.id, paymentHtml, commentHtml);
+                renderEditCart(data.can_edit_items, data.statuses, courierHtml, customerHtml, data.id, paymentHtml, commentHtml, restifyHtml);
                 
             }} catch (e) {{ body.innerHTML = "Помилка: " + e.message; }}
         }}
 
-        function renderEditCart(canEdit, statuses, courierHtml, customerHtml, orderIdStr, paymentHtml = "", commentHtml = "") {{
+        function renderEditCart(canEdit, statuses, courierHtml, customerHtml, orderIdStr, paymentHtml = "", commentHtml = "", restifyHtml = "") {{
             const body = document.getElementById('modal-body');
             let itemsHtml = `<div class="edit-list">`;
             const currentItems = Object.entries(cart);
@@ -835,6 +898,7 @@ STAFF_DASHBOARD_HTML = """
                         ${{statusOptions}}
                     </select>
                 </div>` : ''}}
+                ${{restifyHtml}}
                 ${{courierHtml}}
                 ${{customerHtml}}
                 <h4 style="margin:10px 0 5px 0;">Склад замовлення:</h4>
@@ -844,8 +908,114 @@ STAFF_DASHBOARD_HTML = """
             `;
         }}
 
+        // --- RESTIFY JS FUNCTIONS ---
+        async function callRestifyCourier(orderId) {{
+            if(!confirm("Відправити запит на пошук кур'єра Restify?")) return;
+            const prepTime = document.getElementById('res_prep_time').value;
+            const fee = document.getElementById('res_fee').value;
+            const payment = document.getElementById('res_payment').value;
+            
+            const btn = event.currentTarget;
+            btn.disabled = true;
+            btn.innerText = "Пошук...";
+            
+            try {{
+                const res = await fetch('/staff/api/restify/call_courier', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        orderId: orderId, prep_time: prepTime, delivery_fee: fee, payment_type: payment
+                    }})
+                }});
+                const data = await res.json();
+                if(data.success) {{
+                    showToast("🚀 Замовлення відправлено в Restify!");
+                    openOrderEditModal(orderId, true); 
+                }} else {{
+                    alert(data.error);
+                }}
+            }} catch(e) {{ alert("Помилка з'єднання з сервером"); }}
+            finally {{ if(btn) {{ btn.disabled = false; btn.innerHTML = "<i class='fa-solid fa-motorcycle'></i> Знайти кур'єра Restify"; }} }}
+        }}
+
+        async function fetchRestifyCourierInfo(orderId) {{
+            try {{
+                const res = await fetch(`/staff/api/restify/track/${{orderId}}`);
+                const data = await res.json();
+                const infoDiv = document.getElementById('restify-courier-info');
+                const badge = document.getElementById('res-status-badge');
+                if(!infoDiv) return; 
+                
+                if (data.status === 'ok') {{
+                    infoDiv.innerHTML = `
+                        <div style="margin-bottom:5px;"><b>${{data.name || "Кур'єр"}}</b></div>
+                        <div><a href="tel:${{data.phone}}" style="color:#2563eb; text-decoration:none; font-weight:bold; font-size:1.1rem;"><i class="fa-solid fa-phone"></i> ${{data.phone}}</a></div>
+                    `;
+                    if (badge && data.job_status) badge.innerText = data.job_status;
+                }} else if (data.status === 'waiting') {{
+                    infoDiv.innerHTML = "<i>Пошук кур'єра... Очікуємо прийняття.</i>";
+                }}
+                
+                if (document.getElementById('staff-modal').classList.contains('active') && editingOrderId == orderId) {{
+                    window.trackingInterval = setTimeout(() => fetchRestifyCourierInfo(orderId), 10000);
+                }}
+            }} catch(e) {{}}
+        }}
+
+        let restifyMap = null;
+        let restifyMarker = null;
+        let mapUpdateInterval = null;
+
+        function openRestifyTrack(orderId) {{
+            document.getElementById('restify-map-modal').classList.add('active');
+            
+            if (!restifyMap) {{
+                restifyMap = L.map('restify-map').setView([46.4825, 30.7233], 13);
+                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '© OSM'
+                }}).addTo(restifyMap);
+            }}
+            
+            updateRestifyMap(orderId);
+        }}
+
+        async function updateRestifyMap(orderId) {{
+            if (!document.getElementById('restify-map-modal').classList.contains('active')) return;
+            
+            try {{
+                const res = await fetch(`/staff/api/restify/track/${{orderId}}`);
+                const data = await res.json();
+                
+                if (data.status === 'ok' && data.lat && data.lon) {{
+                    const lat = parseFloat(data.lat);
+                    const lon = parseFloat(data.lon);
+                    
+                    if (!restifyMarker) {{
+                        const icon = L.divIcon({{
+                            html: '<div style="font-size:28px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">🛵</div>',
+                            className: 'courier-marker',
+                            iconSize: [30, 30],
+                            iconAnchor: [15, 15]
+                        }});
+                        restifyMarker = L.marker([lat, lon], {{icon: icon}}).addTo(restifyMap);
+                        restifyMap.setView([lat, lon], 15);
+                    }} else {{
+                        restifyMarker.setLatLng([lat, lon]);
+                    }}
+                }}
+            }} catch (e) {{}}
+            
+            mapUpdateInterval = setTimeout(() => updateRestifyMap(orderId), 5000);
+        }}
+
+        function closeRestifyMap() {{
+            document.getElementById('restify-map-modal').classList.remove('active');
+            if (mapUpdateInterval) clearTimeout(mapUpdateInterval);
+        }}
+
+        // ------------------------------
+
         async function assignCourier(courierId) {{
-            if(!confirm("Змінити кур'єра?")) return;
+            if(!confirm("Змінити локального кур'єра?")) return;
             try {{
                 const res = await fetch('/staff/api/order/assign_courier', {{
                     method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
@@ -919,7 +1089,6 @@ STAFF_DASHBOARD_HTML = """
             btn.innerText = "Збереження...";
 
             try {{
-                // 1. Оновлення деталей клієнта (Ім'я, Адреса, Комент)
                 const detailsPayload = {{
                     orderId: editingOrderId,
                     name: document.getElementById('edit-name').value,
@@ -934,7 +1103,6 @@ STAFF_DASHBOARD_HTML = """
                     body: JSON.stringify(detailsPayload)
                 }});
 
-                // 2. Оновлення кошика
                 const items = Object.values(cart);
                 const res = await fetch('/staff/api/order/update_items', {{
                     method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
@@ -957,7 +1125,6 @@ STAFF_DASHBOARD_HTML = """
             }}
         }}
 
-        // --- NEW: Логика модалки отмены ---
         function showWasteOptions() {{
             document.getElementById('waste-options').style.display = 'block';
         }}
@@ -988,7 +1155,6 @@ STAFF_DASHBOARD_HTML = """
             }} catch(e) {{ alert("Помилка з'єднання"); }}
         }}
 
-        // --- NEW ORDER & PRODUCT ADDING LOGIC ---
         function startDeliveryCreation() {{
             orderMode = 'delivery';
             cart = {{}};
@@ -1183,13 +1349,11 @@ STAFF_DASHBOARD_HTML = """
             modal.classList.add('active');
         }}
         
-        // Новая функция: Открыть форму доставки
         function openDeliveryInfoModal() {{
             closeModal(); 
             document.getElementById('delivery-info-modal').classList.add('active');
         }}
 
-        // Новая функция: Отправка доставки на сервер
         async function finalizeDeliveryOrder() {{
             const phone = document.getElementById('del-phone').value;
             const name = document.getElementById('del-name').value;
@@ -1221,7 +1385,6 @@ STAFF_DASHBOARD_HTML = """
                 if(data.success) {{
                     document.getElementById('delivery-info-modal').classList.remove('active');
                     showToast("Доставка створена!");
-                    // Очистка формы
                     document.getElementById('del-phone').value = '';
                     document.getElementById('del-name').value = '';
                     document.getElementById('del-address').value = '';
@@ -1280,6 +1443,7 @@ STAFF_DASHBOARD_HTML = """
 
         function closeModal() {{
             document.getElementById('staff-modal').classList.remove('active');
+            if (window.trackingInterval) clearTimeout(window.trackingInterval);
         }}
         
         function renderNewOrderMenu() {{
@@ -1318,7 +1482,6 @@ STAFF_DASHBOARD_HTML = """
             }} catch (e) {{ alert("Помилка з'єднання"); }}
         }}
 
-        // --- IMPROVED TRANSACTION MODAL ---
         function openTransactionModal() {{
             const modal = document.getElementById('staff-modal');
             const body = document.getElementById('modal-body');
@@ -1394,7 +1557,6 @@ STAFF_DASHBOARD_HTML = """
             }} catch(e) {{ alert("Error"); }}
         }}
 
-        // --- SUPPLY MODAL LOGIC ---
         let supplyData = null;
         let supplyCart = [];
 
@@ -1406,7 +1568,7 @@ STAFF_DASHBOARD_HTML = """
             try {{
                 const res = await fetch('/staff/api/cashier/suppliers');
                 supplyData = await res.json();
-                supplyCart = []; // Clear cart
+                supplyCart = [];
                 renderSupplyForm();
             }} catch(e) {{
                 document.getElementById('modal-body').innerText = "Помилка завантаження";
@@ -1417,7 +1579,6 @@ STAFF_DASHBOARD_HTML = """
             let supOpts = supplyData.suppliers.map(s => `<option value="${{s.id}}">${{s.name}}</option>`).join('');
             let whOpts = supplyData.warehouses.map(w => `<option value="${{w.id}}">${{w.name}}</option>`).join('');
             
-            // Filter ingredients
             const lowerFilter = filterText.toLowerCase();
             let ingListHtml = "";
             supplyData.ingredients.forEach(i => {{
@@ -1432,7 +1593,6 @@ STAFF_DASHBOARD_HTML = """
             if(!ingListHtml) ingListHtml = "<div style='text-align:center; color:#999; padding:10px;'>Нічого не знайдено</div>";
 
             const body = document.getElementById('modal-body');
-            // Check if we are re-rendering just list or full form
             if(!document.getElementById('supply-ing-list-container')) {{
                 body.innerHTML = `
                     <h3 style="margin:0 0 10px 0;">📥 Прихід товару</h3>
@@ -1462,7 +1622,6 @@ STAFF_DASHBOARD_HTML = """
                 `;
             }} else {{
                 document.getElementById('supply-ing-list-container').innerHTML = ingListHtml;
-                // Refocus search input if needed
                 const input = document.getElementById('supply-search');
                 input.focus();
             }}
@@ -1526,7 +1685,6 @@ STAFF_DASHBOARD_HTML = """
             }} catch(e) {{ alert("Error"); }}
         }}
         
-        // --- PAY DOC MODAL ---
         function openPayDocModal(docId, debtAmount, supplierName) {{
             const modal = document.getElementById('staff-modal');
             document.getElementById('modal-body').innerHTML = `
