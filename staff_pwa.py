@@ -1434,17 +1434,26 @@ async def mark_order_paid_api(
     if order.restify_job_id:
         try:
             token = await get_restify_token(session)
+            
+            # ВАЖЛИВО: Обираємо правильний ендпоінт залежно від статусу Restify
+            endpoint = f"{RESTIFY_BASE_URL}/api/partner/confirm_buyout_paid"
+            if order.restify_status == "returning":
+                endpoint = f"{RESTIFY_BASE_URL}/api/partner/confirm_return"
+                
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    f"{RESTIFY_BASE_URL}/api/partner/confirm_buyout_paid",
+                    endpoint,
                     data={"job_id": order.restify_job_id},
                     cookies={"partner_token": token},
                     timeout=5.0
                 )
                 if resp.status_code == 200:
-                    session.add(OrderLog(order_id=order.id, message="Restify: підтверджено оплату кур'єру", actor="Система"))
+                    session.add(OrderLog(order_id=order.id, message="Restify: синхронізовано оплату/повернення", actor="Система"))
+                    # Опціонально: оновлюємо локальний кеш статусу
+                    if order.restify_status == "returning":
+                        order.restify_status = "delivered"
                 else:
-                    logger.error(f"Restify confirm_buyout_paid failed: {resp.status_code} - {resp.text}")
+                    logger.error(f"Restify sync failed: {resp.status_code} - {resp.text}")
         except Exception as e:
             logger.error(f"Error syncing payment with Restify: {e}")
     # ----------------------------------------
