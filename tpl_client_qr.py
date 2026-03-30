@@ -127,6 +127,21 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
       }}
       .category-nav a.active {{ background: var(--primary); color: white; box-shadow: 0 4px 15px color-mix(in srgb, var(--primary), transparent 60%); }}
 
+      /* --- PROMO PRICE STYLES --- */
+      .price-wrapper {{ display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
+      .old-price {{ text-decoration: line-through; color: #94a3b8; font-size: 0.95rem; font-weight: 600; }}
+      .current-price {{ font-size: 1.25rem; font-weight: 800; color: var(--text-main); }}
+      .promo-price {{ color: #ef4444; }}
+      
+      .sale-badge {{ 
+          position: absolute; top: 12px; left: 12px; 
+          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); 
+          color: white; padding: 5px 12px; border-radius: 8px; 
+          font-weight: 800; font-size: 0.75rem; text-transform: uppercase; 
+          letter-spacing: 1px; z-index: 2; 
+          box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4); 
+      }}
+
       /* --- MAIN --- */
       .container {{ max-width: 1280px; margin: 0 auto; padding: 0 25px; }}
       .category-section {{ margin-bottom: 60px; scroll-margin-top: 120px; }}
@@ -145,7 +160,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
       }}
       .product-card:hover {{ transform: translateY(-8px) scale(1.01); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--primary), transparent 80%); }}
       
-      .product-image-wrapper {{ width: 100%; aspect-ratio: 4/3; overflow: hidden; background: #f5f5f7; }}
+      .product-image-wrapper {{ width: 100%; aspect-ratio: 4/3; overflow: hidden; background: #f5f5f7; position: relative; }}
       .product-image {{ width: 100%; height: 100%; object-fit: cover; transition: transform 0.6s var(--ease-out); }}
       .product-card:hover .product-image {{ transform: scale(1.1); }}
       
@@ -158,7 +173,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
       .add-btn {{
           background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: var(--radius-sm);
           font-weight: 600; cursor: pointer; font-size: 0.95rem; display: flex; align-items: center; gap: 8px;
-          transition: all 0.2s var(--ease-out);
+          transition: all 0.2s var(--ease-out); z-index: 2; position: relative;
       }}
       .add-btn:hover {{ background: color-mix(in srgb, var(--primary), black 15%); transform: translateY(-2px); box-shadow: 0 4px 12px color-mix(in srgb, var(--primary), transparent 60%); }}
       .add-btn:active {{ transform: scale(0.95); }}
@@ -623,16 +638,28 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
                         card.onclick = (e) => {{
                             if(!e.target.closest('.add-btn')) openDetail(prod);
                         }};
+                        
+                        // НОВЕ: Логіка бейджа і акційної ціни
+                        let priceHtml = `<div class="product-price">${{prod.price}} грн</div>`;
+                        let badgeHtml = '';
+                        
+                        if (prod.promotional_price && prod.promotional_price > 0) {{
+                            priceHtml = `<div class="price-wrapper"><span class="old-price">${{prod.price}}</span><span class="current-price promo-price">${{prod.promotional_price}} грн</span></div>`;
+                            badgeHtml = `<div class="sale-badge"><i class="fa-solid fa-tag"></i> Акція</div>`;
+                        }}
 
                         card.innerHTML = `
-                            <div class="product-image-wrapper"><img src="${{img}}" class="product-image" loading="lazy"></div>
+                            <div class="product-image-wrapper">
+                                ${{badgeHtml}}
+                                <img src="${{img}}" class="product-image" loading="lazy">
+                            </div>
                             <div class="product-info">
                                 <div class="product-header">
                                     <div class="product-name">${{prod.name}}</div>
                                     <div class="product-desc">${{prod.description||''}}</div>
                                 </div>
                                 <div class="product-footer">
-                                    <div class="product-price">${{prod.price}} грн</div>
+                                    ${{priceHtml}}
                                     <button class="add-btn" onclick="event.stopPropagation(); handleAdd(this, JSON.parse(this.dataset.product))" data-product="${{prodJson}}">
                                         <i class="fa-solid fa-plus"></i>
                                     </button>
@@ -693,20 +720,32 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         
         window.updateDetailPrice = () => {{
             if(!currentDetailProduct) return;
-            let price = currentDetailProduct.price;
+            
+            let basePrice = currentDetailProduct.promotional_price && currentDetailProduct.promotional_price > 0 ? currentDetailProduct.promotional_price : currentDetailProduct.price;
+            let price = basePrice;
+            
             document.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => price += parseFloat(cb.dataset.price));
-            document.getElementById('det-price').innerText = price.toFixed(2) + ' грн';
+            
+            if (currentDetailProduct.promotional_price && currentDetailProduct.promotional_price > 0) {{
+                let oldBase = currentDetailProduct.price;
+                document.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => oldBase += parseFloat(cb.dataset.price));
+                document.getElementById('det-price').innerHTML = `<div class="price-wrapper" style="justify-content:flex-start; margin-bottom: 20px;"><span class="old-price" style="font-size: 1.1rem;">${{oldBase.toFixed(2)}}</span><span class="current-price promo-price" style="font-size: 1.6rem;">${{price.toFixed(2)}} грн</span></div>`;
+            }} else {{
+                document.getElementById('det-price').innerText = price.toFixed(2) + ' грн';
+            }}
+            
             document.getElementById('det-add-btn').innerText = `В кошик (${{price.toFixed(2)}} грн)`;
         }};
 
         function addToCart(prod, mods) {{
+            let actualPrice = prod.promotional_price && prod.promotional_price > 0 ? prod.promotional_price : prod.price;
             const modIds = mods.map(m => m.id).sort().join('-');
             const key = `${{prod.id}}-${{modIds}}`;
             
             if (cart[key]) {{
                 cart[key].quantity++;
             }} else {{
-                let price = prod.price;
+                let price = actualPrice;
                 mods.forEach(m => price += m.price);
                 cart[key] = {{
                     id: prod.id, name: prod.name, price: price, quantity: 1, modifiers: mods, key: key

@@ -74,6 +74,7 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
             "name": p.name, 
             "description": p.description, 
             "price": float(p.price), 
+            "promotional_price": float(p.promotional_price) if p.promotional_price else None, # НОВЕ ПОЛЕ
             "image_url": p.image_url, 
             "category_id": p.category_id,
             "modifiers": mods_list
@@ -412,7 +413,11 @@ async def place_in_house_order(
                     if price_val is None: price_val = 0
                     mods_price += Decimal(str(price_val))
             
-            item_price = product.price + mods_price
+            # --- НОВЕ: Акційна ціна ---
+            actual_price = product.promotional_price if product.promotional_price and product.promotional_price > 0 else product.price
+            item_price = actual_price + mods_price
+            # --------------------------
+            
             total_price += item_price * qty
             
             mod_names = [m.get('name') for m in modifiers_data]

@@ -164,7 +164,13 @@ class Product(Base):
     name: Mapped[str] = mapped_column(sa.String(100))
     description: Mapped[str] = mapped_column(sa.String(500), nullable=True)
     image_url: Mapped[str] = mapped_column(sa.String(255), nullable=True)
+    
     price: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False) 
+    
+    # --- НОВЕ ПОЛЕ: Акційна ціна ---
+    promotional_price: Mapped[Optional[Decimal]] = mapped_column(sa.Numeric(10, 2), nullable=True)
+    # -------------------------------
+    
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
     category_id: Mapped[int] = mapped_column(sa.ForeignKey('categories.id'))
     

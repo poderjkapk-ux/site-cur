@@ -1226,9 +1226,15 @@ STAFF_DASHBOARD_HTML = """
                     html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
                     filteredProds.forEach(p => {{
                         const pData = JSON.stringify(p).replace(/"/g, '&quot;');
+                        
+                        // НОВЕ: Показуємо акційну ціну для персоналу
+                        let priceDisplay = p.old_price 
+                            ? `<del style="color:#999; font-size:0.85em;">${{p.old_price}}</del> <span style="color:#e74c3c; font-weight:bold;">${{p.price}}</span>` 
+                            : p.price;
+
                         html += `
                         <div class="edit-item">
-                            <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}} грн)</small></div>
+                            <div style="flex-grow:1;">${{p.name}} <small>(${{priceDisplay}} грн)</small></div>
                             <button class="action-btn" style="padding:6px 12px;" onclick="handleProductClick(this)" data-product="${{pData}}" data-editing="${{isEditing}}">+</button>
                         </div>`;
                     }});

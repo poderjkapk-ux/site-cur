@@ -92,6 +92,12 @@ async def admin_products(
         # Картинка
         img_html = f'<img src="/{p.image_url}" class="product-img-preview" alt="img">' if p.image_url else '<div class="no-img"><i class="fa-regular fa-image"></i></div>'
 
+        # Відображення акційної ціни
+        if p.promotional_price and p.promotional_price > 0:
+            price_html = f"<del style='color:#ef4444; font-size:0.85em;'>{p.price}</del><br><strong>{p.promotional_price}</strong> <small>грн</small>"
+        else:
+            price_html = f"{p.price} <small>грн</small>"
+
         # Кнопка перемикання статусу
         toggle_icon = "fa-eye-slash" if p.is_active else "fa-eye"
         toggle_title = "Приховати" if p.is_active else "Активувати"
@@ -102,7 +108,7 @@ async def admin_products(
             <td style="text-align:center; color:#888;">{p.id}</td>
             <td>{img_html}</td>
             <td style="font-weight:600;">{html.escape(p.name)}</td>
-            <td>{p.price} <small>грн</small></td>
+            <td>{price_html}</td>
             <td>{html.escape(p.category.name if p.category else '–')}</td>
             <td>{area_badge}</td> 
             <td>{active_badge}</td>
@@ -250,6 +256,11 @@ async def admin_products(
                         </div>
                     </div>
                     
+                    <div style="margin-bottom: 15px;">
+                        <label for="promotional_price">Акційна ціна (грн) <small style="color:#888;">(необов'язково)</small></label>
+                        <input type="number" id="promotional_price" name="promotional_price" min="0" step="0.01" placeholder="0.00">
+                    </div>
+                    
                     <label for="category_id">Категорія *</label>
                     <select id="category_id" name="category_id" required>
                         {category_options}
@@ -290,6 +301,7 @@ async def admin_products(
 async def add_product(
     name: str = Form(...), 
     price: Decimal = Form(...), 
+    promotional_price: Optional[Decimal] = Form(None),
     description: str = Form(""), 
     category_id: int = Form(...), 
     production_warehouse_id: int = Form(None),
@@ -348,6 +360,7 @@ async def add_product(
     product = Product(
         name=name, 
         price=price, 
+        promotional_price=promotional_price if promotional_price and promotional_price > 0 else None,
         description=description, 
         image_url=image_url, 
         category_id=category_id, 
@@ -423,6 +436,11 @@ async def get_edit_product_form(
                 </div>
             </div>
             
+            <div style="margin-bottom: 15px;">
+                <label for="promotional_price">Акційна ціна (грн) <small style="color:#888;">(необов'язково)</small></label>
+                <input type="number" id="promotional_price" name="promotional_price" min="0" step="0.01" value="{product.promotional_price or ''}" placeholder="0.00">
+            </div>
+            
             <label for="category_id">Категорія</label>
             <select id="category_id" name="category_id" required>
                 {category_options}
@@ -465,6 +483,7 @@ async def edit_product(
     product_id: int, 
     name: str = Form(...), 
     price: Decimal = Form(...), 
+    promotional_price: Optional[Decimal] = Form(None),
     description: str = Form(""), 
     category_id: int = Form(...), 
     production_warehouse_id: int = Form(None),
@@ -479,6 +498,7 @@ async def edit_product(
 
     product.name = name
     product.price = price
+    product.promotional_price = promotional_price if promotional_price and promotional_price > 0 else None
     product.description = description
     product.category_id = category_id
     product.production_warehouse_id = production_warehouse_id
@@ -733,7 +753,7 @@ async def api_get_products(
 ):
     """API для отримання списку продуктів (використовується в JS при створенні замовлення)."""
     res = await session.execute(
-        select(Product.id, Product.name, Product.price, Product.preparation_area, Category.name.label("category"))
+        select(Product.id, Product.name, Product.price, Product.promotional_price, Product.preparation_area, Category.name.label("category"))
         .join(Category, Product.category_id == Category.id, isouter=True)
         .where(Product.is_active == True)
         .order_by(Category.sort_order, Product.name)
@@ -742,6 +762,7 @@ async def api_get_products(
         "id": row.id, 
         "name": row.name, 
         "price": float(row.price),
+        "promotional_price": float(row.promotional_price) if row.promotional_price else None,
         "category": row.category or "Без категорії",
         "preparation_area": row.preparation_area
     } for row in res.mappings().all()]

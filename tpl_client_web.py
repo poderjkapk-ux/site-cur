@@ -268,6 +268,21 @@ WEB_ORDER_HTML = """
           border-color: var(--primary);
       }}
 
+      /* --- PROMO PRICE STYLES --- */
+      .price-wrapper {{ display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
+      .old-price {{ text-decoration: line-through; color: #94a3b8; font-size: 0.95rem; font-weight: 600; }}
+      .current-price {{ font-size: 1.25rem; font-weight: 800; color: var(--text-main); }}
+      .promo-price {{ color: #ef4444; }}
+      
+      .sale-badge {{ 
+          position: absolute; top: 12px; left: 12px; 
+          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); 
+          color: white; padding: 5px 12px; border-radius: 8px; 
+          font-weight: 800; font-size: 0.75rem; text-transform: uppercase; 
+          letter-spacing: 1px; z-index: 2; 
+          box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4); 
+      }}
+
       /* --- MAIN CONTENT (WIDE ADAPTIVE) --- */
       .container {{ 
           max-width: 1800px; 
@@ -1223,16 +1238,27 @@ WEB_ORDER_HTML = """
                                 if(!e.target.closest('.add-btn')) openProductDetails(prod);
                             }};
 
+                            let priceHtml = `<div class="product-price">${{prod.price}} грн</div>`;
+                            let badgeHtml = '';
+                            
+                            if (prod.promotional_price && prod.promotional_price > 0) {{
+                                priceHtml = `<div class="price-wrapper"><span class="old-price">${{prod.price}}</span><span class="current-price promo-price">${{prod.promotional_price}} грн</span></div>`;
+                                badgeHtml = `<div class="sale-badge"><i class="fa-solid fa-tag"></i> Акція</div>`;
+                            }}
+
                             // UPDATE FOR SEO: h3 tag and alt attribute
                             card.innerHTML = `
-                                <div class="product-image-wrapper"><img src="${{img}}" alt="${{prod.name}}" class="product-image" loading="lazy"></div>
+                                <div class="product-image-wrapper">
+                                    ${{badgeHtml}}
+                                    <img src="${{img}}" alt="${{prod.name}}" class="product-image" loading="lazy">
+                                </div>
                                 <div class="product-info">
                                     <div class="product-header">
                                         <h3 class="product-name">${{prod.name}}</h3>
                                         <div class="product-desc">${{prod.description || ''}}</div>
                                     </div>
                                     <div class="product-footer">
-                                        <div class="product-price">${{prod.price}} грн</div>
+                                        ${{priceHtml}}
                                         <button class="add-btn" data-product="${{prodJson}}" onclick="event.stopPropagation(); handleAddClick(this)">
                                             <span>Додати</span> <i class="fa-solid fa-plus"></i>
                                         </button>
@@ -1250,7 +1276,8 @@ WEB_ORDER_HTML = """
 
             // Логика клика по кнопке "Добавить" в списке
             window.handleAddClick = (btn) => {{
-                const prod = JSON.parse(btn.dataset.product);
+                // Parse correctly using double quotes back
+                const prod = JSON.parse(btn.dataset.product.replace(/&quot;/g, '"'));
                 
                 // Если у товара есть модификаторы, обязательно открываем карточку
                 if (prod.modifiers && prod.modifiers.length > 0) {{
@@ -1282,6 +1309,8 @@ WEB_ORDER_HTML = """
                 const siteUrl = window.location.origin;
                 const imgUrl = prod.image_url ? `${{siteUrl}}/${{prod.image_url}}` : `${{siteUrl}}/static/images/placeholder.jpg`;
                 const productUrl = `${{siteUrl}}?p=${{prod.slug}}`;
+                
+                const actualPrice = prod.promotional_price && prod.promotional_price > 0 ? prod.promotional_price : prod.price;
 
                 const schema = {{
                     "@context": "https://schema.org/",
@@ -1294,7 +1323,7 @@ WEB_ORDER_HTML = """
                         "@type": "Offer",
                         "url": productUrl,
                         "priceCurrency": "UAH",
-                        "price": prod.price,
+                        "price": actualPrice,
                         "availability": "https://schema.org/InStock"
                     }}
                 }};
@@ -1342,9 +1371,11 @@ WEB_ORDER_HTML = """
                     let newTitle = SEO_TEMPLATES.title_mask;
                     let newDesc = SEO_TEMPLATES.desc_mask;
                     
+                    const actualPrice = prod.promotional_price && prod.promotional_price > 0 ? prod.promotional_price : prod.price;
+                    
                     const replacements = {{
                         '{{name}}': prod.name,
-                        '{{price}}': prod.price.toFixed(2),
+                        '{{price}}': actualPrice.toFixed(2),
                         '{{description}}': (prod.description || '').replace(/"/g, ''),
                         '{{site_title}}': SEO_TEMPLATES.site_title,
                         '{{category}}': prod.category_name || ''
@@ -1363,13 +1394,14 @@ WEB_ORDER_HTML = """
                 updateProductSEO(prod);
 
                 // --- GA EVENT: view_item ---
+                const actualPriceForAnalytics = prod.promotional_price && prod.promotional_price > 0 ? prod.promotional_price : prod.price;
                 sendGA('view_item', {{
                     currency: 'UAH',
-                    value: prod.price,
+                    value: actualPriceForAnalytics,
                     items: [{{
                         item_id: prod.id.toString(),
                         item_name: prod.name,
-                        price: prod.price,
+                        price: actualPriceForAnalytics,
                         quantity: 1
                     }}]
                 }});
@@ -1434,27 +1466,40 @@ WEB_ORDER_HTML = """
             // Функция обновления цены в модальном окне при выборе модификаторов
             window.updateDetailPrice = () => {{
                 if (!currentDetailProduct) return;
-                let price = currentDetailProduct.price;
+                
+                let basePrice = currentDetailProduct.promotional_price && currentDetailProduct.promotional_price > 0 
+                                ? currentDetailProduct.promotional_price 
+                                : currentDetailProduct.price;
+                let price = basePrice;
                 
                 const checkedBoxes = detailModifiers.querySelectorAll('.mod-detail-checkbox:checked');
                 checkedBoxes.forEach(cb => {{
                     price += parseFloat(cb.dataset.price);
                 }});
                 
-                detailPrice.textContent = price.toFixed(2) + ' грн';
+                if (currentDetailProduct.promotional_price && currentDetailProduct.promotional_price > 0) {{
+                    let oldBase = currentDetailProduct.price;
+                    checkedBoxes.forEach(cb => {{ oldBase += parseFloat(cb.dataset.price); }});
+                    
+                    detailPrice.innerHTML = `<div class="price-wrapper" style="justify-content:flex-start; margin-bottom: 20px;"><span class="old-price" style="font-size: 1.1rem;">${{oldBase.toFixed(2)}}</span><span class="current-price promo-price" style="font-size: 1.6rem;">${{price.toFixed(2)}} грн</span></div>`;
+                }} else {{
+                    detailPrice.textContent = price.toFixed(2) + ' грн';
+                }}
+                
                 // Обновляем текст на кнопке для наглядности
                 const btnSpan = detailAddBtn.querySelector('span');
                 if(btnSpan) btnSpan.textContent = `В кошик за ${{price.toFixed(2)}} грн`;
             }};
 
             function addToCart(prod, mods) {{
+                let actualPrice = prod.promotional_price && prod.promotional_price > 0 ? prod.promotional_price : prod.price;
                 const modIds = mods.map(m => m.id).sort().join('-');
                 const key = `${{prod.id}}-${{modIds}}`;
                 
                 if (cart[key]) {{
                     cart[key].quantity++;
                 }} else {{
-                    let price = prod.price;
+                    let price = actualPrice;
                     mods.forEach(m => price += m.price);
                     cart[key] = {{
                         id: prod.id, name: prod.name, price: price, quantity: 1, modifiers: mods, key: key
@@ -1468,7 +1513,7 @@ WEB_ORDER_HTML = """
                 setTimeout(() => toggle.style.transform = 'scale(1) rotate(0)', 300);
 
                 // --- GA EVENT: add_to_cart ---
-                let finalPrice = prod.price;
+                let finalPrice = actualPrice;
                 mods.forEach(m => finalPrice += m.price);
                 
                 sendGA('add_to_cart', {{

@@ -360,7 +360,9 @@ async def show_category_paginated(callback: CallbackQuery, session: AsyncSession
 
     keyboard = InlineKeyboardBuilder()
     for product in products_on_page:
-        keyboard.add(InlineKeyboardButton(text=f"{product.name} - {product.price} грн", callback_data=f"show_product_{product.id}"))
+        actual_price = product.promotional_price if product.promotional_price and product.promotional_price > 0 else product.price
+        price_display = f"{actual_price} грн" + (" (Акція)" if product.promotional_price and product.promotional_price > 0 else "")
+        keyboard.add(InlineKeyboardButton(text=f"{product.name} - {price_display}", callback_data=f"show_product_{product.id}"))
     keyboard.adjust(1) 
 
     nav_buttons = []
@@ -404,9 +406,12 @@ async def show_product(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Страву не знайдено або вона тимчасово недоступна!", show_alert=True)
         return
 
+    actual_price = product.promotional_price if product.promotional_price and product.promotional_price > 0 else product.price
+    price_text = f"<del>{product.price}</del> <b>{actual_price} грн</b> 🎁 Акція!" if product.promotional_price and product.promotional_price > 0 else f"<b>Ціна: {product.price} грн</b>"
+    
     text = (f"<b>{html.escape(product.name)}</b>\n\n"
             f"<i>{html.escape(product.description or 'Опис відсутній.')}</i>\n\n"
-            f"<b>Ціна: {product.price} грн</b>")
+            f"{price_text}")
 
     kb = InlineKeyboardBuilder()
     kb.add(InlineKeyboardButton(text="➕ Додати в кошик", callback_data=f"add_to_cart_{product.id}"))
@@ -462,7 +467,8 @@ async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, av
     kb.row(InlineKeyboardButton(text="📥 Додати в кошик", callback_data="confirm_add_to_cart"))
     kb.row(InlineKeyboardButton(text="🔙 Скасувати", callback_data=f"show_product_{product.id}"))
     
-    current_price = product.price + sum(m.price for m in available_modifiers if m.id in selected_ids)
+    base_price = product.promotional_price if product.promotional_price and product.promotional_price > 0 else product.price
+    current_price = base_price + sum(m.price for m in available_modifiers if m.id in selected_ids)
     
     text = f"<b>{html.escape(product.name)}</b>\nЦіна з добавками: {current_price} грн\n\nОберіть добавки:"
     
@@ -554,7 +560,7 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 
     for item in cart_items:
         if item.product:
-            item_base_price = item.product.price
+            item_base_price = item.product.promotional_price if item.product.promotional_price and item.product.promotional_price > 0 else item.product.price
             mods_price = Decimal(0)
             mods_str = ""
             
@@ -656,7 +662,7 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
     total_price = Decimal(0)
     for item in cart_items:
         if item.product:
-            item_price = item.product.price
+            item_price = item.product.promotional_price if item.product.promotional_price and item.product.promotional_price > 0 else item.product.price
             if item.modifiers:
                 item_price += sum(Decimal(str(m.get('price', 0) or 0)) for m in item.modifiers)
             total_price += item_price * item.quantity
@@ -918,7 +924,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
 
     for cart_item in cart_items:
         if cart_item.product:
-            item_price = cart_item.product.price
+            item_price = cart_item.product.promotional_price if cart_item.product.promotional_price and cart_item.product.promotional_price > 0 else cart_item.product.price
             
             final_mods_data = []
             mods_price_sum = Decimal(0)
@@ -1386,7 +1392,9 @@ async def get_web_ordering_page(request: Request, session: AsyncSession = Depend
             
             prod_data = {
                 "id": prod.id, "name": prod.name, "description": prod.description,
-                "price": float(prod.price), "image_url": prod.image_url,
+                "price": float(prod.price), 
+                "promotional_price": float(prod.promotional_price) if prod.promotional_price else None,
+                "image_url": prod.image_url,
                 "category_id": prod.category_id,
                 "category_name": prod.category.name if prod.category else "",
                 "modifiers": mods_list,
@@ -1395,10 +1403,18 @@ async def get_web_ordering_page(request: Request, session: AsyncSession = Depend
             # Екрануємо лапки для HTML атрибута
             prod_json = json.dumps(prod_data).replace('"', '&quot;')
 
+            if prod.promotional_price and prod.promotional_price > 0:
+                price_html = f'<div class="price-wrapper"><span class="old-price">{prod.price}</span><span class="current-price promo-price">{prod.promotional_price} грн</span></div>'
+                badge_html = '<div class="sale-badge"><i class="fa-solid fa-tag"></i> Акція</div>'
+            else:
+                price_html = f'<div class="product-price">{prod.price} грн</div>'
+                badge_html = ''
+
             # HTML картки товару
             menu_html_parts.append(f'''
             <div class="product-card">
                 <div class="product-image-wrapper">
+                    {badge_html}
                     <img src="{img_src}" alt="{html.escape(prod.name)}" class="product-image" loading="lazy">
                 </div>
                 <div class="product-info">
@@ -1407,7 +1423,7 @@ async def get_web_ordering_page(request: Request, session: AsyncSession = Depend
                         <div class="product-desc">{html.escape(prod.description or "")}</div>
                     </div>
                     <div class="product-footer">
-                        <div class="product-price">{prod.price} грн</div>
+                        {price_html}
                         <button class="add-btn" data-product="{prod_json}" onclick="event.stopPropagation(); handleAddClick(this)">
                             <span>Додати</span> <i class="fa-solid fa-plus"></i>
                         </button>
@@ -1475,10 +1491,11 @@ async def get_web_ordering_page(request: Request, session: AsyncSession = Depend
         target_product = next((p for p in products if transliterate_slug(p.name) == product_slug or str(p.id) == product_slug), None)
         
         if target_product:
+            actual_price_for_seo = target_product.promotional_price if target_product.promotional_price and target_product.promotional_price > 0 else target_product.price
             # Формуємо змінні для заміни
             replacements = {
                 "{name}": target_product.name,
-                "{price}": f"{target_product.price:.2f}",
+                "{price}": f"{actual_price_for_seo:.2f}",
                 "{description}": (target_product.description or "").replace('"', '').replace('\n', ' '),
                 "{category}": target_product.category.name if target_product.category else "",
                 "{site_title}": settings.site_title or ""
@@ -1585,6 +1602,7 @@ async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(ge
         raise HTTPException(status_code=404, detail="Сторінку не знайдено")
         
     return {"title": menu_item.title, "content": menu_item.content}
+
 @app.get("/api/menu")
 async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
     try:
@@ -1620,6 +1638,7 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
                 "name": p.name, 
                 "description": p.description, 
                 "price": float(p.price), 
+                "promotional_price": float(p.promotional_price) if p.promotional_price else None,
                 "image_url": p.image_url, 
                 "category_id": p.category_id,
                 "category_name": p.category.name if p.category else "", # Added category name
@@ -1689,7 +1708,8 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                         "warehouse_id": mod_db.warehouse_id 
                     })
             
-            item_total_price = (product.price + mods_price_sum)
+            actual_price = product.promotional_price if product.promotional_price and product.promotional_price > 0 else product.price
+            item_total_price = (actual_price + mods_price_sum)
             total_price += item_total_price * qty
             
             log_items.append(f"{product.name} x{qty}")
@@ -1999,13 +2019,14 @@ async def _process_and_save_order(order: Order, data: dict, session: AsyncSessio
                 if product:
                     qty = int(item_data.get('quantity', 0))
                     if qty > 0:
+                        actual_price = product.promotional_price if product.promotional_price and product.promotional_price > 0 else product.price
                         current_items_map[pid] = {"name": product.name, "qty": qty}
-                        total_price += product.price * qty
+                        total_price += actual_price * qty
                         new_items_objects.append(OrderItem(
                             product_id=pid,
                             product_name=product.name,
                             quantity=qty,
-                            price_at_moment=product.price, 
+                            price_at_moment=actual_price, 
                             preparation_area=product.preparation_area
                         ))
 

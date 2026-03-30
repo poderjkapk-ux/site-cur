@@ -181,13 +181,16 @@ async def check_and_update_order_readiness(session: AsyncSession, order_id: int,
         if ready_status and order.status_id != ready_status.id:
             old_status = order.status.name
             
-            # --- ВИПРАВЛЕННЯ ТУТ ---
-            # Змінюємо не тільки ID, а й сам об'єкт зв'язку в пам'яті SQLAlchemy
+            # Змінюємо ТІЛЬКИ ID
             order.status_id = ready_status.id
-            order.status = ready_status  # <--- ОБОВ'ЯЗКОВО!
-            # -----------------------
             
             session.add(OrderStatusHistory(order_id=order.id, status_id=ready_status.id, actor_info="Система (Авто-готовність)"))
+            
+            # ВАЖЛИВО: Зберігаємо зміни в БД ДО відправки сповіщень, 
+            # щоб уникнути помилки NotNullViolationError при autoflush
+            await session.commit()
+            await session.refresh(order, ['status'])
+            updated = False # Скидаємо прапорець, бо вже зберегли
             
             # Сповіщаємо всіх про зміну статусу
             await notify_all_parties_on_status_change(
@@ -199,8 +202,6 @@ async def check_and_update_order_readiness(session: AsyncSession, order_id: int,
                 "type": "order_updated",
                 "order_id": order.id
             })
-            
-            updated = True
 
     if updated:
         await session.commit()
@@ -1609,7 +1610,8 @@ async def update_order_items_api(
                             "warehouse_id": m_db.warehouse_id 
                         })
                 
-                item_price = p.price + mods_price
+                actual_price = p.promotional_price if p.promotional_price and p.promotional_price > 0 else p.price
+                item_price = actual_price + mods_price
                 total_price += item_price * qty
                 
                 session.add(OrderItem(
@@ -1802,10 +1804,14 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
                         "price": float(price_val)
                     })
             
+            actual_price = float(p.promotional_price) if p.promotional_price and p.promotional_price > 0 else float(p.price)
+            old_price = float(p.price) if p.promotional_price and p.promotional_price > 0 else None
+            
             prod_list.append({
                 "id": p.id, 
                 "name": p.name, 
-                "price": float(p.price), 
+                "price": actual_price, 
+                "old_price": old_price,
                 "preparation_area": p.preparation_area,
                 "production_warehouse_id": p.production_warehouse_id,
                 "modifiers": p_mods 
@@ -1880,7 +1886,8 @@ async def create_waiter_order(
                             "warehouse_id": m_db.warehouse_id
                         })
                 
-                item_price = prod.price + mods_price
+                actual_price = prod.promotional_price if prod.promotional_price and prod.promotional_price > 0 else prod.price
+                item_price = actual_price + mods_price
                 total += item_price * qty
                 
                 items_obj.append(OrderItem(
@@ -2155,7 +2162,8 @@ async def create_staff_delivery_order(
                             "warehouse_id": m_db.warehouse_id
                         })
                 
-                item_price = prod.price + mods_price
+                actual_price = prod.promotional_price if prod.promotional_price and prod.promotional_price > 0 else prod.price
+                item_price = actual_price + mods_price
                 total += item_price * qty
                 
                 items_obj.append(OrderItem(
