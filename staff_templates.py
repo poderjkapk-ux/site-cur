@@ -423,6 +423,17 @@ STAFF_DASHBOARD_HTML = """
         .tab-content {{ display: none; }}
         .tab-content.active {{ display: block; animation: fadeIn 0.3s; }}
         @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(5px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+
+        /* CHAT STYLES */
+        .chat-container {{ display: flex; flex-direction: column; height: 350px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 12px; overflow: hidden; margin-top: 10px; }}
+        .chat-messages {{ flex-grow: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }}
+        .chat-msg {{ max-width: 80%; padding: 10px 15px; border-radius: 15px; font-size: 0.95rem; line-height: 1.4; position: relative; }}
+        .chat-msg.partner {{ background: var(--primary); color: white; align-self: flex-end; border-bottom-right-radius: 2px; }}
+        .chat-msg.courier {{ background: #e2e8f0; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; }}
+        .chat-time {{ font-size: 0.7rem; opacity: 0.7; margin-top: 5px; text-align: right; display: block; }}
+        .chat-input-area {{ display: flex; padding: 10px; background: white; border-top: 1px solid #ddd; }}
+        .chat-input-area input {{ flex-grow: 1; border: 1px solid #ccc; padding: 10px 15px; border-radius: 20px; font-size: 0.95rem; }}
+        .chat-input-area button {{ background: var(--green); color: white; border: none; width: 40px; height: 40px; border-radius: 50%; margin-left: 10px; cursor: pointer; display: flex; justify-content: center; align-items: center; }}
     </style>
 </head>
 <body>
@@ -728,9 +739,8 @@ STAFF_DASHBOARD_HTML = """
 
                 // --- GENERATE RESTIFY HTML & PAYMENT BUTTON ---
                 let restifyHtml = "";
-                let cashBtnHtml = ""; // Локальную кнопку убираем полностью
+                let cashBtnHtml = ""; 
                 
-                // Проверяем включен ли функционал в админке
                 if (data.restify_is_active && data.is_delivery && data.can_assign_courier) {{
                     if (!data.restify_job_id) {{
                         restifyHtml = `
@@ -748,12 +758,11 @@ STAFF_DASHBOARD_HTML = """
                             <button class="big-btn" style="background:#4f46e5; margin-top:5px;" onclick="callRestifyCourier(${{data.id}})"><i class="fa-solid fa-motorcycle"></i> Знайти кур'єра Restify</button>
                         </div>`;
                     }} else {{
-                        // Кнопка подтверждения оплаты (только для Restify внутри его зоны)
                         let restifyPayBtn = "";
                         if (data.payment_method === 'cash' && !data.is_cash_turned_in) {{
                             restifyPayBtn = `
                             <div style="margin-top:10px; padding-top:10px; border-top:1px dashed #bbf7d0;">
-                                <button class="big-btn success" style="margin-top:0;" onclick="markOrderPaid(${{data.id}})">
+                                <button class="big-btn success" style="margin-top:0; margin-bottom: 10px;" onclick="markOrderPaid(${{data.id}})">
                                     ✅ Підтвердити отримання грошей (Викуп)
                                 </button>
                             </div>`;
@@ -761,12 +770,33 @@ STAFF_DASHBOARD_HTML = """
                             restifyPayBtn = `<div style="margin-top:10px; padding-top:10px; border-top:1px dashed #bbf7d0; color:#166534; font-weight:bold;"><i class="fa-solid fa-check-circle"></i> Викуп успішно сплачено</div>`;
                         }}
 
+                        let payCourierFromCashBtn = `
+                        <button class="action-btn" style="width:100%; background:#e67e22; margin-top:10px;" onclick="promptPayCourierFromCash(${{data.id}})">
+                            <i class="fa-solid fa-cash-register"></i> Оплатити послуги кур'єра з каси
+                        </button>`;
+
+                        let boostBtn = `
+                        <button class="action-btn" style="width:100%; background:#f39c12; margin-bottom:10px;" onclick="boostRestifyPrice(${{data.id}})">
+                            <i class="fa-solid fa-arrow-trend-up"></i> Підняти ціну (+10 грн)
+                        </button>`;
+
                         restifyHtml = `
                         <div style="background:#f0fdf4; padding:15px; border-radius:12px; margin-bottom:15px; border:1px solid #bbf7d0;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><h4 style="margin:0; color:#166534;"><i class="fa-solid fa-rocket"></i> Restify Кур'єр</h4><span class="badge" style="background:#166534; color:white;" id="res-status-badge">${{data.restify_status}}</span></div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <h4 style="margin:0; color:#166534;"><i class="fa-solid fa-rocket"></i> Restify Кур'єра</h4>
+                                <span class="badge" style="background:#166534; color:white;" id="res-status-badge">${{data.restify_status}}</span>
+                            </div>
                             <div id="restify-courier-info" style="font-size:0.9rem; margin-bottom:10px;">Завантаження даних...</div>
-                            <button class="action-btn" style="width:100%; background:#3b82f6;" onclick="openRestifyTrack(${{data.id}})"><i class="fa-solid fa-map-location-dot"></i> Відкрити Карту</button>
+                            
+                            ${{data.restify_status === 'pending' ? boostBtn : ''}}
+
+                            <div style="display:flex; gap:10px; margin-bottom:10px;">
+                                <button class="action-btn" style="flex:1; background:#3b82f6;" onclick="openRestifyTrack(${{data.id}})"><i class="fa-solid fa-map-location-dot"></i> Карта</button>
+                                <button class="action-btn" style="flex:1; background:#8e44ad;" onclick="switchOrderTab('tab-chat'); loadRestifyChat(${{data.id}})"><i class="fa-solid fa-comments"></i> Чат</button>
+                            </div>
+                            
                             ${{restifyPayBtn}}
+                            ${{payCourierFromCashBtn}}
                         </div>`;
                         if (window.trackingInterval) clearTimeout(window.trackingInterval);
                         setTimeout(() => fetchRestifyCourierInfo(data.id), 500);
@@ -859,7 +889,6 @@ STAFF_DASHBOARD_HTML = """
             const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
             const saveBtn = `<button class="big-btn" style="margin-top:auto;" onclick="saveOrderChanges()">💾 Зберегти зміни (~${{currentTotal.toFixed(2)}} грн)</button>`;
 
-            // Подготавливаем HTML со статусами (вытягиваем из табов)
             let statusSelectHtml = "";
             if (statusOptions) {{
                 statusSelectHtml = `
@@ -883,6 +912,7 @@ STAFF_DASHBOARD_HTML = """
                     <div class="tab-btn active" onclick="switchOrderTab('tab-items')"><i class="fa-solid fa-utensils"></i> Склад</div>
                     <div class="tab-btn" onclick="switchOrderTab('tab-delivery')"><i class="fa-solid fa-truck"></i> Дані</div>
                     <div class="tab-btn" onclick="switchOrderTab('tab-manage')"><i class="fa-solid fa-gear"></i> Оплата</div>
+                    <div class="tab-btn" id="nav-tab-chat" style="display:none;" onclick="switchOrderTab('tab-chat')"><i class="fa-solid fa-comment"></i> Чат</div>
                 </div>
 
                 <div id="tab-items" class="tab-content active" style="display:flex; flex-direction:column; height:100%;">
@@ -902,7 +932,20 @@ STAFF_DASHBOARD_HTML = """
 
                 <div id="tab-manage" class="tab-content" style="overflow-y:auto;">
                     ${{paymentHtml}}
+                </div>
+
+                <div id="tab-chat" class="tab-content">
+                    <h4 style="margin-top:0;">Зв'язок з кур'єром Restify</h4>
+                    <div class="chat-container">
+                        <div id="chat-messages-area" class="chat-messages">
+                            <div style="text-align:center; color:#999; margin-top:50px;">Завантаження...</div>
+                        </div>
+                        <div class="chat-input-area">
+                            <input type="text" id="chat-input" placeholder="Ваше повідомлення..." onkeypress="if(event.key === 'Enter') sendRestifyMessage(${{orderIdStr}})">
+                            <button onclick="sendRestifyMessage(${{orderIdStr}})"><i class="fa-solid fa-paper-plane"></i></button>
+                        </div>
                     </div>
+                </div>
             `;
         }}
 
@@ -911,6 +954,12 @@ STAFF_DASHBOARD_HTML = """
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
             event.currentTarget.classList.add('active');
+            
+            if (tabId !== 'tab-chat') {{
+                if (chatPollingInterval) clearTimeout(chatPollingInterval);
+            }} else {{
+                if (editingOrderId) loadRestifyChat(editingOrderId);
+            }}
         }};
 
         window.markOrderPaid = async function(orderId) {{
@@ -927,6 +976,110 @@ STAFF_DASHBOARD_HTML = """
                 }} else alert(data.error);
             }} catch(e) {{ alert("Помилка з'єднання"); }}
         }};
+
+        // --- BOOST PRICE ---
+        async function boostRestifyPrice(orderId) {{
+            if (!confirm("Підняти ціну за доставку на 10 грн, щоб пришвидшити пошук кур'єра?")) return;
+            try {{
+                const res = await fetch('/staff/api/restify/boost', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ orderId: orderId, amount: 10.0 }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    showToast("Ціну піднято! Нова ціна доставки: " + data.new_fee + " грн");
+                    openOrderEditModal(orderId, true);
+                }} else {{
+                    alert(data.error);
+                }}
+            }} catch(e) {{ alert("Помилка з'єднання"); }}
+        }}
+
+        // --- PAY COURIER FROM CASH ---
+        async function promptPayCourierFromCash(orderId) {{
+            const amountStr = prompt("Скільки готівки ви віддали кур'єру з каси (грн)?");
+            if (!amountStr) return;
+            const amount = parseFloat(amountStr);
+            if (isNaN(amount) || amount <= 0) return alert("Невірна сума");
+
+            if (!confirm(`Підтвердити списання ${{amount}} грн з каси?`)) return;
+
+            try {{
+                const res = await fetch('/staff/api/restify/pay_courier_from_cash', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ orderId: orderId, amount: amount }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    showToast("✅ Витрату зафіксовано в касі!");
+                }} else {{
+                    alert(data.error);
+                }}
+            }} catch(e) {{ alert("Помилка з'єднання"); }}
+        }}
+
+        // --- CHAT FUNCTIONS ---
+        let chatPollingInterval = null;
+
+        async function loadRestifyChat(orderId) {{
+            document.getElementById('nav-tab-chat').style.display = 'block'; 
+            const area = document.getElementById('chat-messages-area');
+            
+            try {{
+                const res = await fetch(`/staff/api/restify/chat/${{orderId}}`);
+                const data = await res.json();
+                
+                if (data.success) {{
+                    area.innerHTML = "";
+                    if (data.messages.length === 0) {{
+                        area.innerHTML = '<div style="text-align:center; color:#999; margin-top:20px;">Повідомлень поки немає</div>';
+                    }} else {{
+                        data.messages.forEach(msg => {{
+                            const cls = msg.role === 'partner' ? 'partner' : 'courier';
+                            area.innerHTML += `
+                            <div class="chat-msg ${{cls}}">
+                                ${{msg.text}}
+                                <span class="chat-time">${{msg.time}}</span>
+                            </div>`;
+                        }});
+                        area.scrollTop = area.scrollHeight; 
+                    }}
+                }}
+            }} catch (e) {{
+                area.innerHTML = '<div style="text-align:center; color:red; margin-top:20px;">Помилка завантаження</div>';
+            }}
+
+            if (document.getElementById('tab-chat').classList.contains('active')) {{
+                if (chatPollingInterval) clearTimeout(chatPollingInterval);
+                chatPollingInterval = setTimeout(() => loadRestifyChat(orderId), 5000);
+            }}
+        }}
+
+        async function sendRestifyMessage(orderId) {{
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            input.disabled = true;
+            try {{
+                const res = await fetch('/staff/api/restify/chat/send', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ orderId: orderId, message: msg }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    input.value = "";
+                    loadRestifyChat(orderId); 
+                }} else {{
+                    alert(data.error);
+                }}
+            }} catch (e) {{
+                alert("Помилка відправки");
+            }} finally {{
+                input.disabled = false;
+                input.focus();
+            }}
+        }}
 
         // --- RESTIFY JS FUNCTIONS ---
         async function callRestifyCourier(orderId) {{

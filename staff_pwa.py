@@ -1247,6 +1247,132 @@ async def track_restify_courier(order_id: int, session: AsyncSession = Depends(g
             logger.error(f"Restify Track Error: {e}")
             
     return JSONResponse({"error": "Failed to fetch tracking"}, 500)
+
+# --- ЧАТ З КУР'ЄРОМ RESTIFY ---
+@router.get("/api/restify/chat/{order_id}")
+async def get_restify_chat(order_id: int, session: AsyncSession = Depends(get_db_session)):
+    order = await session.get(Order, order_id)
+    if not order or not order.restify_job_id:
+        return JSONResponse({"error": "Немає прив'язки до Restify"}, 404)
+        
+    token = await get_restify_token(session)
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{RESTIFY_BASE_URL}/api/chat/history/{order.restify_job_id}",
+                cookies={"partner_token": token},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                return JSONResponse({"success": True, "messages": resp.json()})
+        except Exception as e:
+            logger.error(f"Restify Chat Fetch Error: {e}")
+            
+    return JSONResponse({"error": "Не вдалося завантажити чат"}, 500)
+
+@router.post("/api/restify/chat/send")
+async def send_restify_chat(
+    request: Request, session: AsyncSession = Depends(get_db_session)
+):
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    message = data.get("message")
+    
+    order = await session.get(Order, order_id)
+    if not order or not order.restify_job_id:
+        return JSONResponse({"error": "Немає прив'язки до Restify"}, 404)
+        
+    token = await get_restify_token(session)
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{RESTIFY_BASE_URL}/api/chat/send",
+                data={"job_id": order.restify_job_id, "message": message, "role": "partner"},
+                cookies={"partner_token": token},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error(f"Restify Chat Send Error: {e}")
+            
+    return JSONResponse({"error": "Не вдалося відправити повідомлення"}, 500)
+
+# --- ПІДНЯТТЯ ЦІНИ (BOOST) ---
+@router.post("/api/restify/boost")
+async def boost_restify_order(
+    request: Request, session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    amount = float(data.get("amount", 10.0))
+    
+    order = await session.get(Order, order_id)
+    if not order or not order.restify_job_id:
+        return JSONResponse({"error": "Немає прив'язки до Restify"}, 404)
+        
+    token = await get_restify_token(session)
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{RESTIFY_BASE_URL}/api/partner/boost_order",
+                data={"job_id": order.restify_job_id, "amount": amount},
+                cookies={"partner_token": token},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                session.add(OrderLog(order_id=order.id, message=f"Піднято ціну доставки Restify на {amount} грн", actor=f"{employee.full_name} (PWA)"))
+                await session.commit()
+                return JSONResponse({"success": True, "new_fee": resp.json().get("new_fee")})
+            else:
+                return JSONResponse({"error": resp.json().get("message", "Помилка Restify")}, 400)
+        except Exception as e:
+            logger.error(f"Restify Boost Error: {e}")
+            
+    return JSONResponse({"error": "Не вдалося підняти ціну"}, 500)
+
+# --- ОПЛАТА ПОСЛУГ КУР'ЄРА З КАСИ ---
+@router.post("/api/restify/pay_courier_from_cash")
+async def pay_courier_from_cash(
+    request: Request, session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    """Списує гроші з каси закладу за доставку (оплата послуг кур'єра)"""
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "Немає прав на касові операції"}, status_code=403)
+        
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    amount = Decimal(str(data.get("amount", 0)))
+    
+    if amount <= 0:
+        return JSONResponse({"error": "Введіть коректну суму"}, 400)
+
+    order = await session.get(Order, order_id)
+    if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
+    
+    shift = await get_any_open_shift(session)
+    if not shift:
+        return JSONResponse({"error": "Касова зміна закрита. Спочатку відкрийте касу."}, 400)
+
+    try:
+        # Списуємо гроші з каси (видаток)
+        await add_shift_transaction(
+            session, shift.id, amount, "out", 
+            f"Оплата послуг кур'єра Restify за замовлення #{order.id}"
+        )
+        
+        session.add(OrderLog(
+            order_id=order.id, 
+            message=f"З каси видано {amount} грн кур'єру Restify", 
+            actor=f"{employee.full_name} (PWA)"
+        ))
+        await session.commit()
+        return JSONResponse({"success": True})
+    except Exception as e:
+        logger.error(f"Pay Courier Error: {e}")
+        return JSONResponse({"error": str(e)}, 500)
 # ----------------------------------
 
 
