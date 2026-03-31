@@ -16,11 +16,23 @@ if TYPE_CHECKING:
     from inventory_models import Modifier
 
 # Зчитування DATABASE_URL зі змінних оточення
+# Зчитування DATABASE_URL зі змінних оточення
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     raise ValueError("Помилка: Змінна оточення DATABASE_URL не встановлена.")
 
-engine = create_async_engine(DATABASE_URL)
+# Отримуємо часовий пояс
+tz = os.environ.get("TZ", "Europe/Kyiv")
+
+# ВАЖНО: Виправляємо старе написання на нове, яке вимагає сучасний PostgreSQL
+if tz == "Europe/Kiev":
+    tz = "Europe/Kyiv"
+
+# Передаємо налаштування часового поясу безпосередньо в PostgreSQL
+engine = create_async_engine(
+    DATABASE_URL,
+    connect_args={"server_settings": {"timezone": tz}}
+)
 async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
