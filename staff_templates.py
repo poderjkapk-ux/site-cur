@@ -424,8 +424,8 @@ STAFF_DASHBOARD_HTML = """
         .tab-content.active {{ display: block; animation: fadeIn 0.3s; }}
         @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(5px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 
-        /* CHAT STYLES */
-        .chat-container {{ display: flex; flex-direction: column; height: 350px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 12px; overflow: hidden; margin-top: 10px; }}
+        /* CHAT STYLES (FLEX UPDATED) */
+        .chat-container {{ display: flex; flex-direction: column; flex-grow: 1; min-height: 200px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 12px; overflow: hidden; margin-top: 5px; }}
         .chat-messages {{ flex-grow: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }}
         .chat-msg {{ max-width: 80%; padding: 10px 15px; border-radius: 15px; font-size: 0.95rem; line-height: 1.4; position: relative; }}
         .chat-msg.partner {{ background: var(--primary); color: white; align-self: flex-end; border-bottom-right-radius: 2px; }}
@@ -934,8 +934,8 @@ STAFF_DASHBOARD_HTML = """
                     ${{paymentHtml}}
                 </div>
 
-                <div id="tab-chat" class="tab-content">
-                    <h4 style="margin-top:0;">Зв'язок з кур'єром Restify</h4>
+                <div id="tab-chat" class="tab-content" style="display:none; flex-direction:column; height:100%; overflow:hidden; padding-bottom:10px;">
+                    <h4 style="margin-top:0; margin-bottom:5px;">Зв'язок з кур'єром Restify</h4>
                     <div class="chat-container">
                         <div id="chat-messages-area" class="chat-messages">
                             <div style="text-align:center; color:#999; margin-top:50px;">Завантаження...</div>
@@ -950,15 +950,38 @@ STAFF_DASHBOARD_HTML = """
         }}
 
         window.switchOrderTab = function(tabId) {{
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            // Примусово ховаємо всі вкладки
+            document.querySelectorAll('.tab-content').forEach(el => {{
+                el.classList.remove('active');
+                el.style.display = 'none'; 
+            }});
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            event.currentTarget.classList.add('active');
+            
+            // Показуємо потрібну вкладку
+            const targetTab = document.getElementById(tabId);
+            if (targetTab) {{
+                targetTab.classList.add('active');
+                // Для чату та складу використовуємо flex, щоб вони тягнулися на весь екран
+                if (tabId === 'tab-items' || tabId === 'tab-chat') {{
+                    targetTab.style.display = 'flex';
+                }} else {{
+                    targetTab.style.display = 'block';
+                }}
+            }}
+            
+            if (event && event.currentTarget) {{
+                event.currentTarget.classList.add('active');
+            }}
             
             if (tabId !== 'tab-chat') {{
                 if (chatPollingInterval) clearTimeout(chatPollingInterval);
             }} else {{
                 if (editingOrderId) loadRestifyChat(editingOrderId);
+                // Прокручуємо чат вниз при відкритті
+                setTimeout(() => {{
+                    const area = document.getElementById('chat-messages-area');
+                    if (area) area.scrollTop = area.scrollHeight;
+                }}, 100);
             }}
         }};
 
